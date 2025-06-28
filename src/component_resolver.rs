@@ -1,0 +1,526 @@
+//! Component instantiation and resolution system
+
+use crate::ast::*;
+use crate::error::{CompilerError, Result};
+use crate::types::*;
+use std::collections::{HashMap, HashSet};
+
+pub struct ComponentResolver {
+    instantiation_stack: Vec<String>, // Track instantiation to detect recursion
+}
+
+impl ComponentResolver {
+    pub fn new() -> Self {
+        Self {
+            instantiation_stack: Vec::new(),
+        }
+    }
+    
+    pub fn resolve_components(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {
+        self.resolve_recursive(ast, state)?;
+        self.update_component_statistics(state);
+        Ok(())
+    }
+    
+    fn resolve_recursive(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {
+        match ast {
+            AstNode::File { app, components, .. } => {
+                // First pass: collect all component definitions
+                for component_node in components {
+                    if let AstNode::Component { name, .. } = component_node {
+                        if self.instantiation_stack.contains(name) {
+                            return Err(CompilerError::component(
+                                0,
+                                format!("Recursive component definition detected: {}", name)
+                            ));
+                        }
+                    }
+                }
+                
+                // Second pass: resolve component instances in the main app
+                if let Some(app_node) = app {
+                    self.resolve_element_components(app_node, state)?;
+                }
+            }
+            _ => {}
+        }
+        
+        Ok(())
+    }
+    
+    fn resolve_element_components(&mut self, element: &mut AstNode, state: &mut CompilerState) -> Result<()> {
+        match element {
+            AstNode::Element { element_type, properties, children, .. } => {
+                // Check if this element is a component instance
+                if let Some(component_def) = self.find_component_definition(element_type, state) {
+                    self.instantiate_component(element, &component_def, state)?;
+                } else {
+                    // Regular element - just process children
+                    for child in children {
+                        self.resolve_element_components(child, state)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        Ok(())
+    }
+    
+    fn find_component_definition(&self, name: &str, state: &CompilerState) -> Option<ComponentDefinition> {
+        state.component_defs.iter()
+            .find(|comp| comp.name == name)
+            .cloned()
+    }
+    
+    fn instantiate_component(
+        &mut self,
+        element: &mut AstNode,
+        component_def: &ComponentDefinition,
+        state: &mut CompilerState
+    ) -> Result<()> {
+        if let AstNode::Element { element_type, properties, children, .. } = element {
+            // Check for recursive instantiation
+            if self.instantiation_stack.contains(&component_def.name) {
+                return Err(CompilerError::component(
+                    0,
+                    format!("Recursive component instantiation: {}", component_def.name)
+                ));
+            }
+            
+            self.instantiation_stack.push(component_def.name.clone());
+            
+            // Get the component template
+            let template = self.get_component_template(component_def, state)?;
+            
+            // Create property mapping for template variable substitution
+            let property_mapping = self.create_property_mapping(properties, component_def)?;
+            
+            // Clone and customize the template
+            let mut instantiated_template = template.clone();
+            self.apply_property_mapping(&mut instantiated_template, &property_mapping)?;
+            
+            // Handle instance children (slot content)
+            if !children.is_empty() {
+                self.inject_slot_content(&mut instantiated_template, children)?;
+            }
+            
+            // Replace the component instance with the instantiated template
+            *element = instantiated_template;
+            
+            // Recursively resolve any nested components
+            self.resolve_element_components(element, state)?;
+            
+            self.instantiation_stack.pop();
+        }
+        
+        Ok(())
+    }
+    
+    fn get_component_template(&self, component_def: &ComponentDefinition, state: &CompilerState) -> Result<AstNode> {
+        // Find the template element in the elements array
+        if let Some(root_index) = component_def.definition_root_element_index {
+            if let Some(template_element) = state.elements.get(root_index) {
+                // Convert internal Element back to AstNode for processing
+                self.convert_element_to_ast(template_element, state)
+            } else {
+                Err(CompilerError::component(
+                    0,
+                    format!("Component '{}' template element not found", component_def.name)
+                ))
+            }
+        } else {
+            Err(CompilerError::component(
+                0,
+                format!("Component '{}' has no template defined", component_def.name)
+            ))
+        }
+    }
+    
+    fn convert_element_to_ast(&self, element: &Element, state: &CompilerState) -> Result<AstNode> {
+        let mut properties = Vec::new();
+        
+        // Convert source properties back to AST properties
+        for source_prop in &element.source_properties {
+            properties.push(AstProperty::new(
+                source_prop.key.clone(),
+                source_prop.value.clone(),
+                source_prop.line_num,
+            ));
+        }
+        
+        // Convert children
+        let mut children = Vec::new();
+        for &child_index in &element.children {
+            if let Some(child_element) = state.elements.get(child_index) {
+                children.push(self.convert_element_to_ast(child_element, state)?);
+            }
+        }
+        
+        Ok(AstNode::Element {
+            element_type: element.source_element_name.clone(),
+            properties,
+            pseudo_selectors: Vec::new(), // TODO: Convert state property sets back
+            children,
+        })
+    }
+    
+    fn create_property_mapping(
+        &self,
+        instance_properties: &[AstProperty],
+        component_def: &ComponentDefinition
+    ) -> Result<HashMap<String, String>> {
+        let mut mapping = HashMap::new();
+        
+        // Start with default values from component definition
+        for prop_def in &component_def.properties {
+            mapping.insert(prop_def.name.clone(), prop_def.default_value.clone());
+        }
+        
+        // Override with instance-provided values
+        for instance_prop in instance_properties {
+            // Check if this property is defined in the component
+            if component_def.properties.iter().any(|p| p.name == instance_prop.key) {
+                mapping.insert(instance_prop.key.clone(), instance_prop.value.clone());
+            } else {
+                // Allow unknown properties to pass through for custom behavior
+                log::warn!("Component property '{}' not defined in component schema", instance_prop.key);
+                mapping.insert(instance_prop.key.clone(), instance_prop.value.clone());
+            }
+        }
+        
+        Ok(mapping)
+    }
+    
+    fn apply_property_mapping(&self, template: &mut AstNode, mapping: &HashMap<String, String>) -> Result<()> {
+        match template {
+            AstNode::Element { properties, children, .. } => {
+                // Replace variable references in properties
+                for prop in properties {
+                    prop.value = self.substitute_variables(&prop.value, mapping)?;
+                }
+                
+                // Recursively process children
+                for child in children {
+                    self.apply_property_mapping(child, mapping)?;
+                }
+            }
+            _ => {}
+        }
+        
+        Ok(())
+    }
+    
+    fn substitute_variables(&self, value: &str, mapping: &HashMap<String, String>) -> Result<String> {
+        let mut result = value.to_string();
+        
+        // Find all $variable references
+        let var_regex = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+        
+        // Replace each variable reference
+        for captures in var_regex.captures_iter(value) {
+            if let Some(var_match) = captures.get(0) {
+                let var_name = &captures[1];
+                
+                if let Some(replacement) = mapping.get(var_name) {
+                    result = result.replace(var_match.as_str(), replacement);
+                } else {
+                    return Err(CompilerError::component(
+                        0,
+                        format!("Undefined component property variable: ${}", var_name)
+                    ));
+                }
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    fn inject_slot_content(&self, template: &mut AstNode, slot_content: &[AstNode]) -> Result<()> {
+        // Find content slot in template (element with id="content_slot" or similar)
+        if let Some(slot_element) = self.find_content_slot(template) {
+            // Add slot content as children
+            if let AstNode::Element { children, .. } = slot_element {
+                children.extend_from_slice(slot_content);
+            }
+        } else {
+            // No explicit slot found - append to root element
+            if let AstNode::Element { children, .. } = template {
+                children.extend_from_slice(slot_content);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn find_content_slot<'a>(&self, element: &'a mut AstNode) -> Option<&'a mut AstNode> {
+        let is_slot = if let AstNode::Element { properties, .. } = element {
+            properties.iter().any(|prop| {
+                prop.key == "id"
+                    && (prop.cleaned_value() == "content_slot"
+                        || prop.cleaned_value() == "slot"
+                        || prop.cleaned_value().contains("slot"))
+            })
+        } else {
+            false
+        };
+
+        if is_slot {
+            return Some(element);
+        }
+
+        if let AstNode::Element { children, .. } = element {
+            for child in children {
+                if let Some(slot) = self.find_content_slot(child) {
+                    return Some(slot);
+                }
+            }
+        }
+
+        None
+    }
+
+    
+    fn update_component_statistics(&self, state: &mut CompilerState) {
+        // Update header flags if components were used
+        if !state.component_defs.is_empty() {
+            state.header_flags |= FLAG_HAS_COMPONENT_DEFS;
+        }
+        
+        // Calculate component definition sizes
+        for component in &mut state.component_defs {
+            let mut size = 2u32; // name_index + property_count
+            
+            // Add property definitions size
+            for prop_def in &component.properties {
+                size += 3; // name_index + type_hint + default_value_length
+                size += prop_def.default_value.len() as u32;
+            }
+            
+            component.calculated_size = size;
+        }
+    }
+    
+    /// Validate component definitions for correctness
+    pub fn validate_component_definitions(&self, state: &CompilerState) -> Result<()> {
+        for component in &state.component_defs {
+            // Check for valid property types
+            for prop_def in &component.properties {
+                self.validate_property_type(&prop_def.value_type_hint, &component.name)?;
+            }
+            
+            // Check that component has a template
+            if component.definition_root_element_index.is_none() {
+                return Err(CompilerError::component(
+                    component.definition_start_line,
+                    format!("Component '{}' has no template element defined", component.name)
+                ));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_property_type(&self, value_type: &ValueType, component_name: &str) -> Result<()> {
+        match value_type {
+            ValueType::String | ValueType::Int | ValueType::Float | 
+            ValueType::Bool | ValueType::Color | ValueType::Resource => {
+                // Basic types are always valid
+                Ok(())
+            }
+            ValueType::StyleId => {
+                // Style references should be validated against available styles
+                // This would require access to the style table
+                Ok(())
+            }
+            ValueType::Enum => {
+                // Enum types need validation of their values
+                // This would require parsing the enum definition
+                Ok(())
+            }
+            ValueType::Custom => {
+                log::warn!("Component '{}' uses custom property type", component_name);
+                Ok(())
+            }
+            _ => {
+                Err(CompilerError::component(
+                    0,
+                    format!("Invalid property type in component '{}'", component_name)
+                ))
+            }
+        }
+    }
+    
+    /// Get statistics about component usage
+    pub fn get_component_stats(&self, state: &CompilerState) -> ComponentStats {
+        let mut stats = ComponentStats {
+            total_definitions: state.component_defs.len(),
+            total_instantiations: 0,
+            max_instantiation_depth: 0,
+            definitions_by_complexity: HashMap::new(),
+        };
+        
+        // Count component usage in element tree
+        for element in &state.elements {
+            if element.is_component_instance {
+                stats.total_instantiations += 1;
+            }
+        }
+        
+        // Analyze component complexity
+        for component in &state.component_defs {
+            let complexity = self.calculate_component_complexity(component, state);
+            stats.definitions_by_complexity.insert(component.name.clone(), complexity);
+        }
+        
+        stats
+    }
+    
+    fn calculate_component_complexity(&self, component: &ComponentDefinition, state: &CompilerState) -> ComponentComplexity {
+        let mut complexity = ComponentComplexity {
+            property_count: component.properties.len(),
+            template_element_count: 0,
+            max_nesting_depth: 0,
+            has_slot_content: false,
+        };
+        
+        // Analyze template complexity
+        if let Some(root_index) = component.definition_root_element_index {
+            if let Some(root_element) = state.elements.get(root_index) {
+                complexity.template_element_count = self.count_template_elements(root_element, state);
+                complexity.max_nesting_depth = self.calculate_nesting_depth(root_element, state, 0);
+                complexity.has_slot_content = self.has_slot_markers(root_element);
+            }
+        }
+        
+        complexity
+    }
+    
+    fn count_template_elements(&self, element: &Element, state: &CompilerState) -> usize {
+        let mut count = 1; // This element
+        
+        for &child_index in &element.children {
+            if let Some(child) = state.elements.get(child_index) {
+                count += self.count_template_elements(child, state);
+            }
+        }
+        
+        count
+    }
+    
+    fn calculate_nesting_depth(&self, element: &Element, state: &CompilerState, current_depth: usize) -> usize {
+        let mut max_depth = current_depth;
+        
+        for &child_index in &element.children {
+            if let Some(child) = state.elements.get(child_index) {
+                let child_depth = self.calculate_nesting_depth(child, state, current_depth + 1);
+                max_depth = max_depth.max(child_depth);
+            }
+        }
+        
+        max_depth
+    }
+    
+    fn has_slot_markers(&self, element: &Element) -> bool {
+        // Check if element has id containing "slot"
+        for prop in &element.source_properties {
+            if prop.key == "id" && prop.value.contains("slot") {
+                return true;
+            }
+        }
+        
+        false
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentStats {
+    pub total_definitions: usize,
+    pub total_instantiations: usize,
+    pub max_instantiation_depth: usize,
+    pub definitions_by_complexity: HashMap<String, ComponentComplexity>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentComplexity {
+    pub property_count: usize,
+    pub template_element_count: usize,
+    pub max_nesting_depth: usize,
+    pub has_slot_content: bool,
+}
+
+impl ComponentStats {
+    pub fn print_summary(&self) {
+        println!("Component Statistics:");
+        println!("  Definitions: {}", self.total_definitions);
+        println!("  Instantiations: {}", self.total_instantiations);
+        println!("  Max depth: {}", self.max_instantiation_depth);
+        
+        if !self.definitions_by_complexity.is_empty() {
+            println!("  Complexity breakdown:");
+            for (name, complexity) in &self.definitions_by_complexity {
+                println!("    {}: {} props, {} elements, depth {}{}",
+                        name,
+                        complexity.property_count,
+                        complexity.template_element_count,
+                        complexity.max_nesting_depth,
+                        if complexity.has_slot_content { " (slotted)" } else { "" });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_variable_substitution() {
+        let resolver = ComponentResolver::new();
+        let mut mapping = HashMap::new();
+        mapping.insert("title".to_string(), "\"Hello World\"".to_string());
+        mapping.insert("count".to_string(), "42".to_string());
+        
+        let result = resolver.substitute_variables("text: $title, value: $count", &mapping).unwrap();
+        assert_eq!(result, "text: \"Hello World\", value: 42");
+    }
+    
+    #[test]
+    fn test_undefined_variable_error() {
+        let resolver = ComponentResolver::new();
+        let mapping = HashMap::new();
+        
+        let result = resolver.substitute_variables("text: $undefined", &mapping);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_component_complexity_calculation() {
+        let resolver = ComponentResolver::new();
+        let component_def = ComponentDefinition {
+            name: "TestComponent".to_string(),
+            properties: vec![
+                ComponentPropertyDef {
+                    name: "title".to_string(),
+                    value_type_hint: ValueType::String,
+                    default_value: "Default".to_string(),
+                },
+                ComponentPropertyDef {
+                    name: "count".to_string(),
+                    value_type_hint: ValueType::Int,
+                    default_value: "0".to_string(),
+                },
+            ],
+            definition_start_line: 1,
+            definition_root_element_index: None,
+            calculated_size: 0,
+            internal_template_element_offsets: HashMap::new(),
+        };
+        
+        let state = CompilerState::new();
+        let complexity = resolver.calculate_component_complexity(&component_def, &state);
+        
+        assert_eq!(complexity.property_count, 2);
+        assert_eq!(complexity.template_element_count, 0); // No template
+    }
+}

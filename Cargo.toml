@@ -1,0 +1,75 @@
+[package]
+name = "kryc"
+version = "0.1.0"
+description = "Kryon UI Language Compiler - Compile KRY to optimized KRB binary"
+authors = ["Kryon Development Team"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.70"
+
+[lib]
+name = "kryc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kryc"
+path = "src/main.rs"
+
+[dependencies]
+# Error handling
+thiserror = "1.0"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Binary writing
+byteorder = "1.5"
+
+# Regular expressions
+regex = "1.10"
+
+# Mathematical expression evaluation
+meval = "0.2"
+
+# Logging
+log = "0.4"
+env_logger = "0.10"
+
+# File watching (for CLI watch mode)
+notify = "6.0"
+
+# Directory traversal
+walkdir = "2.4"
+
+# Utilities
+hex = "0.4"
+
+[dev-dependencies]
+# Testing utilities
+tempfile = "3.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = ["all-engines"]
+all-engines = ["lua", "javascript", "python", "wren"]
+lua = []
+javascript = []
+python = []
+wren = []
+
+[[bench]]
+name = "compilation_bench"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+debug = true
