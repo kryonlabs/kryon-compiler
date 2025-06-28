@@ -529,8 +529,7 @@ impl SemanticAnalyzer {
             _ => PropertyId::CustomData,
         }
     }
-    
-    // Property validation helpers
+
     fn is_valid_app_property(&self, key: &str) -> bool {
         matches!(key,
             "window_title" | "window_width" | "window_height" | "window_min_width" |

@@ -91,3 +91,6 @@ kryc.exe
 # Build directory for other build systems
 /build/
 /dist/
+
+
+*.krb

@@ -577,7 +577,7 @@ fn convert_element_to_state(
     }
 }
 
-fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &CompilerState) -> Result<Option<KrbProperty>> {
+fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState) -> Result<Option<KrbProperty>> {
     let cleaned_value = ast_prop.cleaned_value();
     
     let property_id = match ast_prop.key.as_str() {
@@ -641,10 +641,19 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &CompilerState) ->
             }
         }
         PropertyId::TextContent | PropertyId::WindowTitle => {
-            // Find string in state
-            let string_index = state.strings.iter()
-                .position(|s| s.text == cleaned_value)
-                .unwrap_or(0) as u8;
+            // Add string to state if it doesn't exist
+            let string_index = if let Some(pos) = state.strings.iter().position(|s| s.text == cleaned_value) {
+                pos as u8
+            } else {
+                // Add new string
+                let index = state.strings.len() as u8;
+                state.strings.push(StringEntry {
+                    text: cleaned_value.clone(),
+                    length: cleaned_value.len(),
+                    index,
+                });
+                index
+            };
             
             KrbProperty {
                 property_id: property_id as u8,

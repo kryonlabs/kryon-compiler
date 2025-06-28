@@ -1,0 +1,53 @@
+# widgets/tab_bar.kry
+
+# Style for the TabBar Container itself (Row version)
+style "tab_bar_style_base_row" {
+    background_color: "#3E2723FF" # Dark Brown Tab Bar BG
+    height: 50                    # Fixed height for the bar
+    layout: row center            # Lay out children (buttons) in a row, center vertically
+    # No gap needed if buttons grow to fill space
+}
+
+style "tab_bar_style_base_column" {
+    background_color: "#3E2723FF"
+    width: 80
+    layout: column center
+}
+
+style "tab_item_style_base" {
+    background_color: "#A1887FFF"
+    border_width: 0
+    text_alignment: center 
+    text_color: "#EFEBE4FF"
+    layout: grow  
+    height: 50
+}
+
+# Style for ACTIVE Tab Items (Buttons)
+style "tab_item_style_active_base" {
+    extends: "tab_item_style_base"  # Inherits layout:grow and height:50
+
+    # --- Overrides ---
+    background_color: "#6D4C41FF"   # Different OPAQUE background for active state - Medium Brown
+    text_color: "#FFFFFF"           # White text for active state
+}
+
+# --- Widget Definition: TabBar ---
+Define TabBar {
+    Properties {
+        orientation: String = "row"
+        position: String = "bottom"
+        bar_style: StyleID = ""
+    }
+
+    # Root Element Structure (Compiler expands <TabBar> usage into this Container)
+    Container {
+        # Compiler determines style property based on usage/orientation ('tab_bar_style_base_row' likely here)
+        # Compiler merges standard properties (id) from usage here.
+        # Compiler inserts children (Buttons) from usage inside this Container.
+        # The Container's height is set by the style (50px).
+        # The Container's width will likely be set by the parent (App) or stretch.
+        # The layout: row center from the style arranges the Button children.
+        # The Buttons will use layout:grow to divide the horizontal space.
+    }
+}

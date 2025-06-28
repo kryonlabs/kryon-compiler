@@ -104,21 +104,21 @@ impl Parser {
         
         Ok(AstNode::Include { path })
     }
-    
+
     fn parse_variables(&mut self) -> Result<AstNode> {
         self.consume(TokenType::Variables, "Expected @variables")?;
         self.consume(TokenType::LeftBrace, "Expected '{' after @variables")?;
         
         let mut variables = HashMap::new();
         
-        while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
-            // Skip newlines and comments
-            if self.match_token(&TokenType::Newline) || 
-               matches!(self.peek().token_type, TokenType::Comment(_)) {
+        while !self.check(&TokenType::RightBrace) && !self.is_at_end() {            
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            if matches!(self.peek().token_type, TokenType::Comment(_)) {
                 self.advance();
                 continue;
             }
-            
             let name = match &self.advance().token_type {
                 TokenType::Identifier(name) => name.clone(),
                 _ => return Err(CompilerError::parse(
@@ -243,22 +243,27 @@ impl Parser {
     fn parse_style(&mut self) -> Result<AstNode> {
         self.consume(TokenType::Style, "Expected 'style'")?;
         
-        let name = match &self.advance().token_type {
-            TokenType::String(name) => name.clone(),
-            _ => return Err(CompilerError::parse(
-                self.previous().line,
-                "Expected style name string"
-            )),
+
+        let name = if let TokenType::String(name) = &self.peek().token_type {
+            name.clone()
+        } else {
+            return Err(CompilerError::parse(
+                self.peek().line,
+                format!("Expected style name string, but found {}", self.peek().token_type)
+            ));
         };
-        
+        self.advance();
+
         self.consume(TokenType::LeftBrace, "Expected '{' after style name")?;
         
         let mut extends = Vec::new();
         let mut properties = Vec::new();
         
         while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
-            if self.match_token(&TokenType::Newline) || 
-               matches!(self.peek().token_type, TokenType::Comment(_)) {
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            if matches!(self.peek().token_type, TokenType::Comment(_)) {
                 self.advance();
                 continue;
             }
@@ -312,13 +317,15 @@ impl Parser {
     fn parse_component(&mut self) -> Result<AstNode> {
         self.consume(TokenType::Define, "Expected 'Define'")?;
         
-        let name = match &self.advance().token_type {
-            TokenType::Identifier(name) => name.clone(),
-            _ => return Err(CompilerError::parse(
-                self.previous().line,
+        let name = if let TokenType::Identifier(name) = &self.peek().token_type {
+            name.clone()
+        } else {
+            return Err(CompilerError::parse(
+                self.peek().line,
                 "Expected component name after 'Define'"
-            )),
+            ));
         };
+        self.advance();
         
         self.consume(TokenType::LeftBrace, "Expected '{' after component name")?;
         
@@ -326,11 +333,14 @@ impl Parser {
         let mut template = None;
         
         while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
-            if self.match_token(&TokenType::Newline) || 
-               matches!(self.peek().token_type, TokenType::Comment(_)) {
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            if matches!(self.peek().token_type, TokenType::Comment(_)) {
                 self.advance();
                 continue;
             }
+
             
             if self.match_token(&TokenType::Properties) {
                 properties = self.parse_component_properties()?;
@@ -370,8 +380,10 @@ impl Parser {
         let mut properties = Vec::new();
         
         while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
-            if self.match_token(&TokenType::Newline) || 
-               matches!(self.peek().token_type, TokenType::Comment(_)) {
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            if matches!(self.peek().token_type, TokenType::Comment(_)) {
                 self.advance();
                 continue;
             }
@@ -413,7 +425,7 @@ impl Parser {
     }
     
     fn parse_element(&mut self) -> Result<AstNode> {
-        let element_type = match &self.advance().token_type {
+        let element_type = match &self.peek().token_type {
             TokenType::App => "App".to_string(),
             TokenType::Container => "Container".to_string(),
             TokenType::Text => "Text".to_string(),
@@ -422,10 +434,11 @@ impl Parser {
             TokenType::Input => "Input".to_string(),
             TokenType::Identifier(name) => name.clone(),
             _ => return Err(CompilerError::parse(
-                self.previous().line,
+                self.peek().line,
                 "Expected element type"
             )),
         };
+        self.advance(); 
         
         let mut properties = Vec::new();
         let mut pseudo_selectors = Vec::new();
@@ -433,18 +446,25 @@ impl Parser {
         
         if self.match_token(&TokenType::LeftBrace) {
             while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
-                if self.match_token(&TokenType::Newline) || 
-                   matches!(self.peek().token_type, TokenType::Comment(_)) {
+                if self.match_token(&TokenType::Newline) {
+                    continue;
+                }
+                if matches!(self.peek().token_type, TokenType::Comment(_)) {
                     self.advance();
                     continue;
                 }
-                
+
                 if self.match_token(&TokenType::PseudoSelector) {
                     pseudo_selectors.push(self.parse_pseudo_selector()?);
+                } else if self.is_property() {
+                    properties.push(self.parse_property()?);
                 } else if self.is_element_start() {
                     children.push(self.parse_element()?);
                 } else {
-                    properties.push(self.parse_property()?);
+                    return Err(CompilerError::parse(
+                        self.peek().line,
+                        format!("Unexpected token in element body: {}", self.peek().token_type)
+                    ));
                 }
             }
             
@@ -477,16 +497,27 @@ impl Parser {
         
         Ok(PseudoSelector::new(state, properties, self.previous().line))
     }
-    
+
     fn parse_property(&mut self) -> Result<AstProperty> {
-        let key = match &self.advance().token_type {
+        let key = match &self.peek().token_type {
             TokenType::Identifier(name) => name.clone(),
-            _ => return Err(CompilerError::parse(
-                self.previous().line,
-                "Expected property name"
-            )),
+            // Allow keywords as property names
+            TokenType::Style => "style".to_string(),
+            TokenType::Text => "text".to_string(), 
+            TokenType::Image => "image".to_string(),
+            TokenType::Button => "button".to_string(),
+            TokenType::Input => "input".to_string(),
+            TokenType::Container => "container".to_string(),
+            TokenType::App => "app".to_string(),
+            _ => {
+                return Err(CompilerError::parse(
+                    self.peek().line,
+                    format!("Expected property name, but found token: {}", self.peek().token_type)
+                ));
+            }
         };
-        
+        self.advance(); // Now consume the token we just processed
+    
         self.consume(TokenType::Colon, "Expected ':' after property name")?;
         
         let value = self.parse_value()?;
@@ -498,7 +529,7 @@ impl Parser {
     }
     
     fn parse_value(&mut self) -> Result<String> {
-        match &self.advance().token_type {
+        let result = match &self.peek().token_type {
             TokenType::String(s) => Ok(format!("\"{}\"", s)),
             TokenType::Number(n) => Ok(n.to_string()),
             TokenType::Integer(i) => Ok(i.to_string()),
@@ -506,31 +537,77 @@ impl Parser {
             TokenType::Color(c) => Ok(c.clone()),
             TokenType::Identifier(id) => Ok(id.clone()),
             TokenType::Dollar => {
-                // Variable reference
-                let var_name = match &self.advance().token_type {
-                    TokenType::Identifier(name) => name.clone(),
-                    _ => return Err(CompilerError::parse(
-                        self.previous().line,
+                self.advance(); // Consume the '$'
+                if let TokenType::Identifier(name) = &self.peek().token_type {
+                    Ok(format!("${}", name))
+                } else {
+                    Err(CompilerError::parse(
+                        self.peek().line,
                         "Expected variable name after '$'"
-                    )),
-                };
-                Ok(format!("${}", var_name))
+                    ))
+                }
             }
             _ => Err(CompilerError::parse(
-                self.previous().line,
-                "Expected value"
+                self.peek().line,
+                format!("Expected a value, but found {}", self.peek().token_type)
             )),
+        };
+
+        // If we successfully parsed a value, advance past its token
+        if result.is_ok() {
+            self.advance();
         }
+
+        result
     }
     
     // Utility methods
-    
+
+    fn is_property(&self) -> bool {
+        // Check if current token is an identifier or keyword followed by a colon
+        let is_property_name = match &self.peek().token_type {
+            TokenType::Identifier(_) => true,
+            // Allow keywords to be used as property names
+            TokenType::Style => true,
+            TokenType::Text => true,
+            TokenType::Image => true,
+            TokenType::Button => true,
+            TokenType::Input => true,
+            TokenType::Container => true,
+            TokenType::App => true,
+            _ => false,
+        };
+        
+        if is_property_name {
+            // Look ahead to see if the next token is a colon
+            if self.current + 1 < self.tokens.len() {
+                matches!(self.tokens[self.current + 1].token_type, TokenType::Colon)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     fn is_element_start(&self) -> bool {
-        matches!(self.peek().token_type,
+        match &self.peek().token_type {
+            // Known element types
             TokenType::App | TokenType::Container | TokenType::Text |
-            TokenType::Image | TokenType::Button | TokenType::Input |
-            TokenType::Identifier(_)
-        )
+            TokenType::Image | TokenType::Button | TokenType::Input => true,
+            
+            // For identifiers, check if they're followed by an opening brace (element)
+            // rather than a colon (property)
+            TokenType::Identifier(_) => {
+                if self.current + 1 < self.tokens.len() {
+                    matches!(self.tokens[self.current + 1].token_type, TokenType::LeftBrace)
+                } else {
+                    false
+                }
+            }
+            
+            _ => false
+        }
     }
     
     fn match_token(&mut self, token_type: &TokenType) -> bool {
