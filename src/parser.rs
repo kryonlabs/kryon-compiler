@@ -681,7 +681,12 @@ mod tests {
         
         match ast {
             AstNode::File { app: Some(app), .. } => {
-                assert_eq!(app.element_type(), Some("App"));
+                match app.as_ref() {
+                    AstNode::Element { element_type, .. } => {
+                        assert_eq!(element_type, "App");
+                    }
+                    _ => panic!("Expected App element"),
+                }
             }
             _ => panic!("Expected File with App"),
         }

@@ -482,6 +482,9 @@ fn convert_element_to_state(
     if let AstNode::Element { element_type, properties, children, pseudo_selectors } = ast_element {
         let element_index = state.elements.len();
         
+        // Debug output to track element type parsing
+        println!("Converting element: '{}' -> {:?}", element_type, ElementType::from_name(element_type));
+        
         let mut element = Element {
             element_type: ElementType::from_name(element_type),
             id_string_index: 0,
@@ -522,9 +525,47 @@ fn convert_element_to_state(
         
         // Process properties
         for ast_prop in properties {
-            // Convert property to KRB format based on type
-            if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
-                element.krb_properties.push(krb_prop);
+            // Handle element header properties (pos_x, pos_y, width, height)
+            match ast_prop.key.as_str() {
+                "pos_x" => {
+                    if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() {
+                        element.pos_x = val;
+                    }
+                }
+                "pos_y" => {
+                    if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() {
+                        element.pos_y = val;
+                    }
+                }
+                "width" => {
+                    if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() {
+                        element.width = val;
+                    }
+                }
+                "height" => {
+                    if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() {
+                        element.height = val;
+                    }
+                }
+                "style" => {
+                    // Look up style by name and set style_id
+                    let style_name = ast_prop.cleaned_value();
+                    if let Some(style_index) = state.styles.iter().position(|s| (s.name_index as usize) < state.strings.len() && state.strings[s.name_index as usize].text == style_name) {
+                        element.style_id = style_index as u8;
+                        println!("Applied style '{}' (index {}) to element", style_name, style_index);
+                    } else {
+                        println!("Warning: Style '{}' not found", style_name);
+                    }
+                }
+                "layout" => {
+                    // TODO: Parse layout string and set layout byte
+                }
+                _ => {
+                    // Convert property to KRB format
+                    if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
+                        element.krb_properties.push(krb_prop);
+                    }
+                }
             }
             
             // Also store as source property
@@ -560,7 +601,7 @@ fn convert_element_to_state(
         // Add element to state
         state.elements.push(element);
         
-        // Process children
+        // Process children (element_index is now the correct index after push)
         let mut child_indices = Vec::new();
         for child in children {
             let child_index = convert_element_to_state(child, state, Some(element_index))?;
@@ -580,18 +621,18 @@ fn convert_element_to_state(
 fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState) -> Result<Option<KrbProperty>> {
     let cleaned_value = ast_prop.cleaned_value();
     
+    // Minimal property mapping - only essential properties to avoid corruption
     let property_id = match ast_prop.key.as_str() {
         "background_color" => PropertyId::BackgroundColor,
-        "text_color" | "foreground_color" => PropertyId::ForegroundColor,
+        "text_color" => PropertyId::ForegroundColor,
         "border_color" => PropertyId::BorderColor,
         "border_width" => PropertyId::BorderWidth,
-        "border_radius" => PropertyId::BorderRadius,
         "text" => PropertyId::TextContent,
-        "font_size" => PropertyId::FontSize,
         "window_title" => PropertyId::WindowTitle,
         "window_width" => PropertyId::WindowWidth,
         "window_height" => PropertyId::WindowHeight,
-        _ => return Ok(None), // Skip unknown properties for now
+        "text_alignment" => PropertyId::TextAlignment,
+        _ => return Ok(None), // Skip all other properties for now
     };
     
     let krb_prop = match property_id {
@@ -625,7 +666,8 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 ));
             }
         }
-        PropertyId::WindowWidth | PropertyId::WindowHeight | PropertyId::FontSize => {
+        PropertyId::WindowWidth | PropertyId::WindowHeight | PropertyId::FontSize | 
+        PropertyId::MinWidth | PropertyId::MinHeight | PropertyId::MaxWidth | PropertyId::MaxHeight => {
             if let Ok(val) = cleaned_value.parse::<u16>() {
                 KrbProperty {
                     property_id: property_id as u8,
@@ -638,6 +680,22 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                     ast_prop.line,
                     format!("Invalid numeric value: {}", cleaned_value)
                 ));
+            }
+        }
+        PropertyId::TextAlignment => {
+            let alignment_val = match cleaned_value.to_lowercase().as_str() {
+                "start" => 0u8,
+                "center" => 1u8,
+                "end" => 2u8,
+                "justify" => 3u8,
+                _ => 1u8, // Default to center instead of error
+            };
+            
+            KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![alignment_val],
             }
         }
         PropertyId::TextContent | PropertyId::WindowTitle => {
@@ -748,8 +806,8 @@ pub fn validate_krb_file(data: &[u8]) -> Result<KrbFileInfo> {
     
     // Read version
     let version = cursor.read_u16::<LittleEndian>()?;
-    let major = (version & 0xFF) as u8;
-    let minor = ((version >> 8) & 0xFF) as u8;
+    let major = ((version >> 8) & 0xFF) as u8;
+    let minor = (version & 0xFF) as u8;
     
     // Read flags and counts
     let flags = cursor.read_u16::<LittleEndian>()?;
@@ -919,6 +977,32 @@ mod tests {
         assert!(output_path.exists());
         assert!(stats.compile_time_ms > 0);
         assert!(stats.compression_ratio > 0.0);
+    }
+    
+    fn create_empty_krb_file() -> Vec<u8> {
+        use byteorder::{LittleEndian, WriteBytesExt};
+        
+        let mut data = Vec::new();
+        // Magic number "KRB1"
+        data.extend_from_slice(types::KRB_MAGIC);
+        // Version
+        data.write_u16::<LittleEndian>(
+            ((types::KRB_VERSION_MAJOR as u16) << 8) | (types::KRB_VERSION_MINOR as u16)
+        ).unwrap();
+        // Flags
+        data.write_u16::<LittleEndian>(0).unwrap();
+        // Section counts (all zeros)
+        for _ in 0..7 {
+            data.write_u16::<LittleEndian>(0).unwrap();
+        }
+        // Section offsets (all point to end of header)
+        for _ in 0..7 {
+            data.write_u32::<LittleEndian>(types::KRB_HEADER_SIZE as u32).unwrap();
+        }
+        // Total size
+        data.write_u32::<LittleEndian>(types::KRB_HEADER_SIZE as u32).unwrap();
+        
+        data
     }
     
     #[test]

@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "kryc"
 path = "src/main.rs"
 
+[[bin]]
+name = "debug_krb"
+path = "debug_krb.rs"
+
 [dependencies]
 # Error handling
 thiserror = "1.0"

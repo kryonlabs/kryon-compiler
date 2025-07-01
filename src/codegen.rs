@@ -28,13 +28,8 @@ impl CodeGenerator {
         // Write header
         self.write_header(state)?;
         
-        // Calculate and write section offsets
+        // Calculate and write sections in header order
         let mut current_offset = KRB_HEADER_SIZE as u32;
-        
-        // Write string table
-        let string_offset = current_offset;
-        self.write_string_table(state)?;
-        current_offset = self.output.len() as u32;
         
         // Write element tree
         let element_offset = current_offset;
@@ -51,9 +46,17 @@ impl CodeGenerator {
         self.write_component_table(state)?;
         current_offset = self.output.len() as u32;
         
+        // Animation offset (reserved - no data written)
+        let animation_offset = 0u32;
+        
         // Write script table
         let script_offset = current_offset;
         self.write_script_table(state)?;
+        current_offset = self.output.len() as u32;
+        
+        // Write string table
+        let string_offset = current_offset;
+        self.write_string_table(state)?;
         current_offset = self.output.len() as u32;
         
         // Write resource table
@@ -63,11 +66,12 @@ impl CodeGenerator {
         
         // Update header with actual offsets
         self.update_header_offsets(
-            string_offset,
             element_offset,
             style_offset,
             component_offset,
+            animation_offset,
             script_offset,
+            string_offset,
             resource_offset,
             current_offset,
         )?;
@@ -79,9 +83,9 @@ impl CodeGenerator {
         // Magic number "KRB1"
         self.output.extend_from_slice(KRB_MAGIC);
         
-        // Version (little-endian)
+        // Version (little-endian) - correct format: 0x0005 for v1.2
         self.output.write_u16::<LittleEndian>(
-            ((KRB_VERSION_MINOR as u16) << 8) | (KRB_VERSION_MAJOR as u16)
+            ((KRB_VERSION_MAJOR as u16) << 8) | (KRB_VERSION_MINOR as u16)
         )?;
         
         // Flags
@@ -147,6 +151,11 @@ impl CodeGenerator {
     fn write_element_recursive(&mut self, element_index: usize, state: &CompilerState) -> Result<()> {
         let element = &state.elements[element_index];
         self.element_offsets.insert(element_index, self.output.len() as u32);
+        
+        // Debug output to track what's being written
+        println!("Writing element {}: type={:?} ({}), pos=({}, {}), size=({}, {})", 
+                element_index, element.element_type, element.element_type as u8,
+                element.pos_x, element.pos_y, element.width, element.height);
         
         // Element header (18 bytes)
         self.output.push(element.element_type as u8);
@@ -317,11 +326,12 @@ impl CodeGenerator {
     
     fn update_header_offsets(
         &mut self,
-        string_offset: u32,
         element_offset: u32,
         style_offset: u32,
         component_offset: u32,
+        animation_offset: u32,
         script_offset: u32,
+        string_offset: u32,
         resource_offset: u32,
         total_size: u32,
     ) -> Result<()> {
@@ -330,11 +340,11 @@ impl CodeGenerator {
         // Skip to offset section (magic + version + flags + counts = 22 bytes)
         cursor.set_position(22);
         
-        // Write offsets
+        // Write offsets in correct order per spec
         cursor.write_u32::<LittleEndian>(element_offset)?;
         cursor.write_u32::<LittleEndian>(style_offset)?;
         cursor.write_u32::<LittleEndian>(component_offset)?;
-        cursor.write_u32::<LittleEndian>(0)?; // animation offset
+        cursor.write_u32::<LittleEndian>(animation_offset)?;
         cursor.write_u32::<LittleEndian>(script_offset)?;
         cursor.write_u32::<LittleEndian>(string_offset)?;
         cursor.write_u32::<LittleEndian>(resource_offset)?;
@@ -364,8 +374,8 @@ mod tests {
         
         // Check version
         let version = u16::from_le_bytes([generator.output[4], generator.output[5]]);
-        assert_eq!(version & 0xFF, KRB_VERSION_MAJOR as u16);
-        assert_eq!((version >> 8) & 0xFF, KRB_VERSION_MINOR as u16);
+        assert_eq!((version >> 8) & 0xFF, KRB_VERSION_MAJOR as u16);
+        assert_eq!(version & 0xFF, KRB_VERSION_MINOR as u16);
     }
     
     #[test]

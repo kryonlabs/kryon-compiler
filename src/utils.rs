@@ -681,6 +681,7 @@ pub fn split_properties_by_semicolon(props_str: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{LAYOUT_DIRECTION_ROW, LAYOUT_ALIGNMENT_CENTER, LAYOUT_DIRECTION_COLUMN, LAYOUT_ALIGNMENT_START, LAYOUT_GROW_BIT};
     
     #[test]
     fn test_clean_and_quote_value() {

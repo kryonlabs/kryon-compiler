@@ -69,6 +69,57 @@ impl ElementType {
     }
 }
 
+impl PropertyId {
+    /// Centralized property name to ID mapping - used by all compilation phases
+    pub fn from_name(key: &str) -> Self {
+        match key {
+            "background_color" => PropertyId::BackgroundColor,     // 0x01
+            "text_color" | "foreground_color" => PropertyId::ForegroundColor,  // 0x02  
+            "border_color" => PropertyId::BorderColor,             // 0x03
+            "border_width" => PropertyId::BorderWidth,             // 0x04
+            "border_radius" => PropertyId::BorderRadius,           // 0x05
+            "padding" => PropertyId::Padding,                      // 0x06
+            "margin" => PropertyId::Margin,                        // 0x07
+            "text" => PropertyId::TextContent,                     // 0x08
+            "font_size" => PropertyId::FontSize,                   // 0x09
+            "font_weight" => PropertyId::FontWeight,               // 0x0A
+            "text_alignment" => PropertyId::TextAlignment,         // 0x0B
+            "src" => PropertyId::ImageSource,                      // 0x0C
+            "opacity" => PropertyId::Opacity,                      // 0x0D
+            "z_index" => PropertyId::ZIndex,                       // 0x0E
+            "visibility" => PropertyId::Visibility,                // 0x0F
+            "gap" => PropertyId::Gap,                              // 0x10
+            "min_width" => PropertyId::MinWidth,                   // 0x11
+            "min_height" => PropertyId::MinHeight,                 // 0x12
+            "max_width" => PropertyId::MaxWidth,                   // 0x13
+            "max_height" => PropertyId::MaxHeight,                 // 0x14
+            "aspect_ratio" => PropertyId::AspectRatio,             // 0x15
+            "transform" => PropertyId::Transform,                  // 0x16
+            "shadow" => PropertyId::Shadow,                        // 0x17
+            "overflow" => PropertyId::Overflow,                    // 0x18
+            "cursor" => PropertyId::Cursor,                        // 0x29
+            
+            // App-specific properties (0x20-0x28)
+            "window_width" => PropertyId::WindowWidth,             // 0x20
+            "window_height" => PropertyId::WindowHeight,           // 0x21
+            "window_title" => PropertyId::WindowTitle,             // 0x22
+            "resizable" => PropertyId::Resizable,                  // 0x23
+            "keep_aspect_ratio" => PropertyId::KeepAspect,         // 0x24
+            "scale_factor" => PropertyId::ScaleFactor,             // 0x25
+            "icon" => PropertyId::Icon,                            // 0x26
+            "version" => PropertyId::Version,                      // 0x27
+            "author" => PropertyId::Author,                        // 0x28
+            
+            _ => PropertyId::Invalid,
+        }
+    }
+    
+    /// Check if this property should be handled in the element header instead of as a KRB property
+    pub fn is_element_header_property(key: &str) -> bool {
+        matches!(key, "pos_x" | "pos_y" | "width" | "height" | "style" | "layout")
+    }
+}
+
 // Property IDs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
