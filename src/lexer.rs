@@ -229,6 +229,19 @@ impl Lexer {
                     TokenType::Comment(comment)
                 }
             }
+            '/' => {
+                if self.peek() == Some('/') {
+                    // Double-slash comment
+                    self.advance(); // consume second '/'
+                    let comment = self.read_comment();
+                    TokenType::Comment(comment)
+                } else {
+                    return Err(CompilerError::parse(
+                        self.line,
+                        format!("Unexpected character: '{}' (single slash not supported)", ch)
+                    ));
+                }
+            }
             '"' => {
                 let string_value = self.read_string()?;
                 TokenType::String(string_value)
@@ -589,7 +602,7 @@ mod tests {
     
     #[test]
     fn test_colors() {
-        let mut lexer = Lexer::new("#FF0000 #RGB #12345678", "test.kry".to_string());
+        let mut lexer = Lexer::new("#FF0000 #ABC #12345678", "test.kry".to_string());
         let tokens = lexer.tokenize().unwrap();
         
         match &tokens[0].token_type {
@@ -598,7 +611,7 @@ mod tests {
         }
         
         match &tokens[1].token_type {
-            TokenType::Color(c) => assert_eq!(c, "#RGB"),
+            TokenType::Color(c) => assert_eq!(c, "#ABC"),
             _ => panic!("Expected color token"),
         }
         
@@ -642,6 +655,39 @@ mod tests {
         }
         assert_eq!(tokens[1].token_type, TokenType::Newline);
         assert_eq!(tokens[2].token_type, TokenType::App);
+    }
+    
+    #[test]
+    fn test_double_slash_comments() {
+        let mut lexer = Lexer::new("// This is a double-slash comment\nContainer", "test.kry".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        
+        match &tokens[0].token_type {
+            TokenType::Comment(c) => assert_eq!(c, " This is a double-slash comment"),
+            _ => panic!("Expected comment token"),
+        }
+        assert_eq!(tokens[1].token_type, TokenType::Newline);
+        assert_eq!(tokens[2].token_type, TokenType::Container);
+    }
+    
+    #[test]
+    fn test_both_comment_styles() {
+        let input = "# Hash comment\n// Double-slash comment\nApp";
+        let mut lexer = Lexer::new(input, "test.kry".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        
+        match &tokens[0].token_type {
+            TokenType::Comment(c) => assert_eq!(c, " Hash comment"),
+            _ => panic!("Expected hash comment token"),
+        }
+        assert_eq!(tokens[1].token_type, TokenType::Newline);
+        
+        match &tokens[2].token_type {
+            TokenType::Comment(c) => assert_eq!(c, " Double-slash comment"),
+            _ => panic!("Expected double-slash comment token"),
+        }
+        assert_eq!(tokens[3].token_type, TokenType::Newline);
+        assert_eq!(tokens[4].token_type, TokenType::App);
     }
     
     #[test]
