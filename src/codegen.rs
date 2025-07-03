@@ -25,46 +25,50 @@ impl CodeGenerator {
     pub fn generate(&mut self, state: &CompilerState) -> Result<Vec<u8>> {
         self.output.clear();
         
-        // Write header
+        // Write header with placeholder offsets
         self.write_header(state)?;
         
-        // Calculate and write sections in header order
+        // --- THIS IS THE CORRECTED SECTION ORDER ---
+        // It must match the order in SizeCalculator::calculate_section_offsets
+        
         let mut current_offset = KRB_HEADER_SIZE as u32;
-        
-        // Write element tree
-        let element_offset = current_offset;
-        self.write_element_tree(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // Write style table
-        let style_offset = current_offset;
-        self.write_style_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // Write component definitions
-        let component_offset = current_offset;
-        self.write_component_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // Animation offset (reserved - no data written)
-        let animation_offset = 0u32;
-        
-        // Write script table
-        let script_offset = current_offset;
-        self.write_script_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // Write string table
+
+        // 1. Write String Table
         let string_offset = current_offset;
         self.write_string_table(state)?;
         current_offset = self.output.len() as u32;
         
-        // Write resource table
+        // 2. Write Element Tree
+        let element_offset = current_offset;
+        self.write_element_tree(state)?;
+        current_offset = self.output.len() as u32;
+        
+        // 3. Write Style Table
+        let style_offset = current_offset;
+        self.write_style_table(state)?;
+        current_offset = self.output.len() as u32;
+        
+        // 4. Write Component Definitions
+        let component_offset = current_offset;
+        self.write_component_table(state)?;
+        current_offset = self.output.len() as u32;
+
+        // 5. Animation Offset (reserved)
+        let animation_offset = current_offset; // Points to end, as it's empty
+
+        // 6. Write Script Table
+        let script_offset = current_offset;
+        self.write_script_table(state)?;
+        current_offset = self.output.len() as u32;
+        
+        // 7. Write Resource Table
         let resource_offset = current_offset;
         self.write_resource_table(state)?;
         current_offset = self.output.len() as u32;
         
-        // Update header with actual offsets
+        // --- End of corrected section order ---
+        
+        // Update header with the correct, now-valid offsets
         self.update_header_offsets(
             element_offset,
             style_offset,
@@ -73,7 +77,7 @@ impl CodeGenerator {
             script_offset,
             string_offset,
             resource_offset,
-            current_offset,
+            current_offset, // Total size
         )?;
         
         Ok(self.output.clone())
@@ -147,7 +151,6 @@ impl CodeGenerator {
         
         Ok(())
     }
-    
     fn write_element_recursive(&mut self, element_index: usize, state: &CompilerState) -> Result<()> {
         let element = &state.elements[element_index];
         self.element_offsets.insert(element_index, self.output.len() as u32);

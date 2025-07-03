@@ -225,6 +225,7 @@ impl VariableProcessor {
 
             // Perform variable substitution on lines outside @variables blocks
             let substituted_line = self.var_usage_regex.replace_all(line, |caps: &regex::Captures| {
+
                 let var_name = &caps[1];
                 
                 match state.variables.get(var_name) {
@@ -455,58 +456,40 @@ pub fn parse_color(color_str: &str) -> Result<Color> {
 }
 
 /// Parse layout string into layout byte
-pub fn parse_layout_string(layout_str: &str) -> u8 {
+pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
     use crate::types::*;
     
     let parts: Vec<&str> = layout_str.split_whitespace().collect();
     let mut layout_byte = 0u8;
     
-    let mut has_explicit_direction = false;
-    let mut has_explicit_alignment = false;
+    let mut direction_set = false;
     
-    // Check for explicit settings
-    for part in &parts {
-        match *part {
-            "row" | "col" | "column" | "row_rev" | "row-rev" | "col_rev" | "col-rev" | "column-rev" => {
-                has_explicit_direction = true;
-            }
-            "start" | "center" | "centre" | "end" | "space_between" | "space-between" => {
-                has_explicit_alignment = true;
-            }
-            _ => {}
-        }
-    }
-    
-    // Apply direction (default to Column)
-    if !has_explicit_direction {
+    // Set default direction to column if not specified
+    if !parts.iter().any(|&p| matches!(p, "row" | "column" | "col" | "row_rev" | "col_rev")) {
         layout_byte |= LAYOUT_DIRECTION_COLUMN;
     }
-    
+
     for part in &parts {
         match *part {
+            // Direction
             "row" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ROW;
+                direction_set = true;
             }
             "col" | "column" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COLUMN;
+                direction_set = true;
             }
             "row_rev" | "row-rev" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ROW_REV;
+                direction_set = true;
             }
             "col_rev" | "col-rev" | "column-rev" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COL_REV;
+                direction_set = true;
             }
-            _ => {}
-        }
-    }
-    
-    // Apply alignment (default to Start)
-    if !has_explicit_alignment {
-        layout_byte |= LAYOUT_ALIGNMENT_START;
-    }
-    
-    for part in &parts {
-        match *part {
+
+            // Alignment
             "start" => {
                 layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_START;
             }
@@ -519,21 +502,23 @@ pub fn parse_layout_string(layout_str: &str) -> u8 {
             "space_between" | "space-between" => {
                 layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_SPACE_BETWEEN;
             }
-            _ => {}
-        }
-    }
-    
-    // Apply flags
-    for part in &parts {
-        match *part {
+
+            // Flags
             "wrap" => layout_byte |= LAYOUT_WRAP_BIT,
             "grow" => layout_byte |= LAYOUT_GROW_BIT,
             "absolute" => layout_byte |= LAYOUT_ABSOLUTE_BIT,
-            _ => {}
+
+            // Ignore unknown parts
+            _ => {
+                // Return an error for unknown layout parts
+                return Err(CompilerError::InvalidFormat {
+                    message: format!("Unknown layout value: '{}'", part),
+                });
+            }
         }
     }
     
-    layout_byte
+    Ok(layout_byte)
 }
 
 /// Guess resource type from property key
@@ -719,9 +704,9 @@ mod tests {
     
     #[test]
     fn test_parse_layout_string() {
-        assert_eq!(parse_layout_string("row center"), 
+        assert_eq!(parse_layout_string("row center").unwrap(), 
                    LAYOUT_DIRECTION_ROW | LAYOUT_ALIGNMENT_CENTER);
-        assert_eq!(parse_layout_string("column start grow"), 
+        assert_eq!(parse_layout_string("column start grow").unwrap(), 
                    LAYOUT_DIRECTION_COLUMN | LAYOUT_ALIGNMENT_START | LAYOUT_GROW_BIT);
     }
     

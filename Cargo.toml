@@ -3,7 +3,7 @@ name = "kryc"
 version = "0.1.0"
 description = "Kryon UI Language Compiler - Compile KRY to optimized KRB binary"
 authors = ["Kryon Development Team"]
-license = "MIT"
+license = "0BSD"
 edition = "2021"
 rust-version = "1.70"
 

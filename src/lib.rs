@@ -526,8 +526,6 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
     
     Ok(())
 }
-
-
 fn convert_element_to_state(
     ast_element: &AstNode, 
     state: &mut CompilerState, 
@@ -591,12 +589,12 @@ fn convert_element_to_state(
                         element.pos_y = val;
                     }
                 }
-                "width" => {
+                "width" | "window_width" => { // <-- FIX: Handle window_width
                     if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() {
                         element.width = val;
                     }
                 }
-                "height" => {
+                "height" | "window_height" => { // <-- FIX: Handle window_height
                     if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() {
                         element.height = val;
                     }
@@ -612,7 +610,11 @@ fn convert_element_to_state(
                     }
                 }
                 "layout" => {
-                    // TODO: Parse layout string and set layout byte
+                    let cleaned_value = ast_prop.cleaned_value();
+                    match crate::utils::parse_layout_string(&cleaned_value) {
+                        Ok(layout_byte) => element.layout = layout_byte,
+                        Err(e) => return Err(CompilerError::semantic(ast_prop.line, e.to_string())),
+                    }
                 }
                 _ => {
                     // Convert property to KRB format

@@ -535,7 +535,7 @@ impl SemanticAnalyzer {
             "window_title" | "window_width" | "window_height" | "window_min_width" |
             "window_min_height" | "window_max_width" | "window_max_height" |
             "resizable" | "keep_aspect_ratio" | "scale_factor" | "icon" |
-            "version" | "author" | "background_color" | "id" | "style"
+            "version" | "author" | "background_color" | "id" | "style" | "layout"
         )
     }
     
