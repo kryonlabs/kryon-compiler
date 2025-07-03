@@ -240,8 +240,17 @@ impl CodeGenerator {
     }
     
     fn write_style_table(&mut self, state: &CompilerState) -> Result<()> {
+        // Deduplicate styles by ID to prevent writing duplicates
+        let mut unique_styles = std::collections::HashMap::new();
         for style in &state.styles {
+            unique_styles.insert(style.id, style);
+        }
+        
+        println!("Writing {} unique styles to KRB (from {} total)", unique_styles.len(), state.styles.len());
+        for (_, style) in unique_styles {
             // Style entry header
+            println!("Writing style '{}': id={}, name_index={}, props={}", 
+                style.source_name, style.id, style.name_index, style.properties.len());
             self.output.push(style.id);
             self.output.push(style.name_index);
             self.output.push(style.properties.len() as u8);

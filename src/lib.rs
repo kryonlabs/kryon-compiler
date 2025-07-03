@@ -462,7 +462,61 @@ pub fn compile_source_with_options(
 
 fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> {
     match ast {
-        AstNode::File { app, .. } => {
+        AstNode::File { app, styles, components, scripts, directives } => {
+            // Process styles first since elements may reference them
+            for style_node in styles {
+                if let AstNode::Style { name, extends: _, properties } = style_node {
+                    let style_id = (state.styles.len() + 1) as u8; // 1-based style IDs
+                    
+                    // Add style name to string table
+                    let name_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *name) {
+                        pos as u8
+                    } else {
+                        let index = state.strings.len() as u8;
+                        state.strings.push(StringEntry {
+                            text: name.clone(),
+                            length: name.len(),
+                            index,
+                        });
+                        index
+                    };
+                    
+                    // Convert style properties to KRB format
+                    let mut krb_properties = Vec::new();
+                    for ast_prop in properties {
+                        if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
+                            krb_properties.push(krb_prop);
+                        }
+                    }
+                    
+                    // Create style entry
+                    let style_entry = StyleEntry {
+                        id: style_id,
+                        source_name: name.clone(),
+                        name_index,
+                        extends_style_names: Vec::new(), // TODO: implement extends
+                        properties: krb_properties,
+                        source_properties: properties.iter().map(|p| SourceProperty {
+                            key: p.key.clone(),
+                            value: p.value.clone(),
+                            line_num: p.line,
+                        }).collect(),
+                        calculated_size: 0, // Will be calculated later
+                        is_resolved: true,
+                        is_resolving: false,
+                    };
+                    
+                    println!("Added style '{}' with ID {} and {} properties", name, style_id, style_entry.properties.len());
+                    state.styles.push(style_entry);
+                }
+            }
+            
+            // Process components (TODO: implement component conversion)
+            for _component_node in components {
+                // Components will be processed in a future implementation
+            }
+            
+            // Process app element
             if let Some(app_node) = app {
                 convert_element_to_state(app_node, state, None)?;
             }
@@ -550,9 +604,9 @@ fn convert_element_to_state(
                 "style" => {
                     // Look up style by name and set style_id
                     let style_name = ast_prop.cleaned_value();
-                    if let Some(style_index) = state.styles.iter().position(|s| (s.name_index as usize) < state.strings.len() && state.strings[s.name_index as usize].text == style_name) {
-                        element.style_id = style_index as u8;
-                        println!("Applied style '{}' (index {}) to element", style_name, style_index);
+                    if let Some(style_entry) = state.styles.iter().find(|s| s.source_name == style_name) {
+                        element.style_id = style_entry.id;
+                        println!("Applied style '{}' (ID {}) to element", style_name, style_entry.id);
                     } else {
                         println!("Warning: Style '{}' not found", style_name);
                     }
