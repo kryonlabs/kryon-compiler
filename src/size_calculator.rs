@@ -162,38 +162,45 @@ impl SizeCalculator {
         
         state.total_resource_table_size = total_size;
     }
-    
-    fn calculate_section_offsets(&self, state: &mut CompilerState) {
+        
+    pub fn calculate_section_offsets(&self, state: &mut CompilerState) {
         let mut current_offset = KRB_HEADER_SIZE as u32;
         
-        // String table comes first
+        // The order of these additions MUST match the physical write order in codegen.
+        
+        // 1. String table
         state.string_offset = current_offset;
         current_offset += state.total_string_data_size;
         
-        // Element tree
+        // 2. Element tree
         state.element_offset = current_offset;
         current_offset += state.total_element_data_size;
         
-        // Style table
+        // 3. Style table
         state.style_offset = current_offset;
         current_offset += state.total_style_data_size;
         
-        // Component definitions
+        // --- THIS IS THE LIKELY BUG LOCATION ---
+        // 4. Component definitions
+        // Ensure this line is present and correct. It was likely missing or flawed.
         state.component_def_offset = current_offset;
         current_offset += state.total_component_def_data_size;
         
-        // Scripts
+        // 5. Animations (currently reserved, size is 0)
+        state.anim_offset = current_offset;
+        // current_offset += state.total_anim_data_size; // No size to add yet
+
+        // 6. Scripts
         state.script_offset = current_offset;
         current_offset += state.total_script_data_size;
         
-        // Resources
+        // 7. Resources
         state.resource_offset = current_offset;
         current_offset += state.total_resource_table_size;
         
-        // Total file size
+        // 8. Total file size
         state.total_size = current_offset;
     }
-    
     /// Validate that all sizes are within limits
     pub fn validate_limits(&self, state: &CompilerState) -> Result<()> {
         // Check element count

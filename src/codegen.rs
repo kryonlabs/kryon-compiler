@@ -21,65 +21,89 @@ impl CodeGenerator {
             element_offsets: HashMap::new(),
         }
     }
-    
-    pub fn generate(&mut self, state: &CompilerState) -> Result<Vec<u8>> {
-        self.output.clear();
+    fn write_header_with_offsets(&mut self, state: &CompilerState) -> Result<()> {
+        // Magic number "KRB1"
+        self.output.extend_from_slice(KRB_MAGIC);
         
-        // Write header with placeholder offsets
-        self.write_header(state)?;
-        
-        // --- THIS IS THE CORRECTED SECTION ORDER ---
-        // It must match the order in SizeCalculator::calculate_section_offsets
-        
-        let mut current_offset = KRB_HEADER_SIZE as u32;
-
-        // 1. Write String Table
-        let string_offset = current_offset;
-        self.write_string_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // 2. Write Element Tree
-        let element_offset = current_offset;
-        self.write_element_tree(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // 3. Write Style Table
-        let style_offset = current_offset;
-        self.write_style_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // 4. Write Component Definitions
-        let component_offset = current_offset;
-        self.write_component_table(state)?;
-        current_offset = self.output.len() as u32;
-
-        // 5. Animation Offset (reserved)
-        let animation_offset = current_offset; // Points to end, as it's empty
-
-        // 6. Write Script Table
-        let script_offset = current_offset;
-        self.write_script_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // 7. Write Resource Table
-        let resource_offset = current_offset;
-        self.write_resource_table(state)?;
-        current_offset = self.output.len() as u32;
-        
-        // --- End of corrected section order ---
-        
-        // Update header with the correct, now-valid offsets
-        self.update_header_offsets(
-            element_offset,
-            style_offset,
-            component_offset,
-            animation_offset,
-            script_offset,
-            string_offset,
-            resource_offset,
-            current_offset, // Total size
+        // Version (Major 0, Minor 5)
+        self.output.write_u16::<LittleEndian>(
+            ((KRB_VERSION_MAJOR as u16) << 8) | (KRB_VERSION_MINOR as u16)
         )?;
         
+        // Flags
+        self.output.write_u16::<LittleEndian>(state.header_flags)?;
+        
+        // Count main tree elements
+        let main_element_count = state.elements.iter()
+            .filter(|e| !e.is_definition_root)
+            .count() as u16;
+        
+        // Section counts
+        self.output.write_u16::<LittleEndian>(main_element_count)?;
+        self.output.write_u16::<LittleEndian>(state.styles.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.component_defs.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(0)?; // animation count
+        self.output.write_u16::<LittleEndian>(state.scripts.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.strings.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.resources.len() as u16)?;
+        
+        // Section offsets (now correct)
+        self.output.write_u32::<LittleEndian>(state.element_offset)?;
+        self.output.write_u32::<LittleEndian>(state.style_offset)?;
+        self.output.write_u32::<LittleEndian>(state.component_def_offset)?;
+        self.output.write_u32::<LittleEndian>(state.anim_offset)?;
+        self.output.write_u32::<LittleEndian>(state.script_offset)?;
+        self.output.write_u32::<LittleEndian>(state.string_offset)?;
+        self.output.write_u32::<LittleEndian>(state.resource_offset)?;
+        
+        // Total size
+        self.output.write_u32::<LittleEndian>(state.total_size)?;
+        
+        Ok(())
+    }
+
+    pub fn generate(&mut self, state: &mut CompilerState) -> Result<Vec<u8>> {
+        self.output.clear();
+        
+        // 1. Calculate all section sizes first. This must be done before writing anything.
+        let size_calculator = crate::size_calculator::SizeCalculator::new();
+        size_calculator.calculate_sizes(state)?;
+
+        // 2. Write the header with the now-correctly-calculated offsets from the temp_state.
+        self.write_header_with_offsets(state)?;
+
+        // 3. Write the sections in the EXACT order specified by the KRB format.        
+        // Section: String Table
+        self.write_string_table(state)?;
+        
+        // Section: Element Tree
+        self.write_element_tree(state)?;
+        
+        // Section: Style Table
+        self.write_style_table(state)?;
+        
+        // Section: Component Definitions
+        self.write_component_table(state)?;
+        
+        // Section: Animation Data (currently empty/reserved)
+        // No write function needed if it's always empty.
+
+        // Section: Script Table
+        self.write_script_table(state)?;
+        
+        // Section: Resource Table
+        self.write_resource_table(state)?;
+        
+        // 4. Final validation (optional but good practice)
+        if self.output.len() != state.total_size as usize {
+            return Err(CompilerError::CodeGen {
+                message: format!(
+                    "Final size mismatch! Expected {}, got {}. Check section writing order.",
+                    state.total_size, self.output.len()
+                ),
+            });
+        }
+
         Ok(self.output.clone())
     }
     

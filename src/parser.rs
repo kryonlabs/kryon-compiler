@@ -590,16 +590,58 @@ impl Parser {
     
     fn parse_value(&mut self) -> Result<String> {
         let result = match &self.peek().token_type {
-            TokenType::String(s) => Ok(format!("\"{}\"", s)),
-            TokenType::Number(n) => Ok(n.to_string()),
-            TokenType::Integer(i) => Ok(i.to_string()),
-            TokenType::Boolean(b) => Ok(b.to_string()),
-            TokenType::Color(c) => Ok(c.clone()),
-            TokenType::Identifier(id) => Ok(id.clone()),
+            TokenType::String(s) => {
+                let value = format!("\"{}\"", s);
+                self.advance();
+                Ok(value)
+            }
+            TokenType::Number(n) => {
+                let value = n.to_string();
+                self.advance();
+                Ok(value)
+            }
+            TokenType::Integer(i) => {
+                let value = i.to_string();
+                self.advance();
+                Ok(value)
+            }
+            TokenType::Boolean(b) => {
+                let value = b.to_string();
+                self.advance();
+                Ok(value)
+            }
+            TokenType::Color(c) => {
+                let value = c.clone();
+                self.advance();
+                Ok(value)
+            }
+            TokenType::Identifier(id) => {
+                // Handle multiple identifiers separated by spaces (e.g., "column center")
+                let mut value_parts = vec![id.clone()];
+                self.advance();
+                
+                // Keep collecting identifiers until we hit a newline, semicolon, or closing brace
+                while !self.is_at_end() {
+                    match &self.peek().token_type {
+                        TokenType::Identifier(next_id) => {
+                            value_parts.push(next_id.clone());
+                            self.advance();
+                        }
+                        TokenType::Newline | TokenType::Semicolon | TokenType::RightBrace => {
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                
+                Ok(value_parts.join(" "))
+            }
             TokenType::Dollar => {
                 self.advance(); // Consume the '$'
                 if let TokenType::Identifier(name) = &self.peek().token_type {
-                    Ok(format!("${}", name))
+                    let value = format!("${}", name);
+                    self.advance();
+                    Ok(value)
                 } else {
                     Err(CompilerError::parse(
                         self.peek().line,
@@ -612,11 +654,6 @@ impl Parser {
                 format!("Expected a value, but found {}", self.peek().token_type)
             )),
         };
-
-        // If we successfully parsed a value, advance past its token
-        if result.is_ok() {
-            self.advance();
-        }
 
         result
     }

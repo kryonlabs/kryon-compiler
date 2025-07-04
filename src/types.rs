@@ -204,6 +204,16 @@ pub const LAYOUT_WRAP_BIT: u8 = 1 << 4;
 pub const LAYOUT_GROW_BIT: u8 = 1 << 5;
 pub const LAYOUT_ABSOLUTE_BIT: u8 = 1 << 6;
 
+// Event Types
+pub const EVENT_TYPE_CLICK: u8 = 0x01;
+pub const EVENT_TYPE_PRESS: u8 = 0x02;
+pub const EVENT_TYPE_RELEASE: u8 = 0x03;
+pub const EVENT_TYPE_HOVER: u8 = 0x04;
+pub const EVENT_TYPE_FOCUS: u8 = 0x05;
+pub const EVENT_TYPE_BLUR: u8 = 0x06;
+pub const EVENT_TYPE_CHANGE: u8 = 0x07;
+pub const EVENT_TYPE_SUBMIT: u8 = 0x08;
+
 // Script language IDs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
