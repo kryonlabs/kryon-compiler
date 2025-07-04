@@ -47,6 +47,9 @@ impl Parser {
                 TokenType::Script => {
                     scripts.push(self.parse_script()?);
                 }
+                TokenType::Function => {
+                    scripts.push(self.parse_function()?);
+                }
                 TokenType::Style => {
                     styles.push(self.parse_style()?);
                 }
@@ -188,7 +191,7 @@ impl Parser {
             self.consume(TokenType::LeftBrace, "Expected '{' for script code")?;
             let code = self.parse_script_code()?;
             source = Some(ScriptSource::Inline(code));
-            self.consume(TokenType::RightBrace, "Expected '}' after script code")?;
+            // Note: parse_script_code already handles the closing brace
         }
         
         Ok(AstNode::Script {
@@ -238,6 +241,63 @@ impl Parser {
         }
         
         Ok(code.trim().to_string())
+    }
+    
+    fn parse_function(&mut self) -> Result<AstNode> {
+        self.consume(TokenType::Function, "Expected @function")?;
+        
+        let language = match &self.advance().token_type {
+            TokenType::String(lang) => lang.clone(),
+            _ => return Err(CompilerError::parse(
+                self.previous().line,
+                "Expected language string after @function"
+            )),
+        };
+        
+        // Parse function name and parameters
+        let function_name = match &self.advance().token_type {
+            TokenType::Identifier(name) => name.clone(),
+            _ => return Err(CompilerError::parse(
+                self.previous().line,
+                "Expected function name"
+            )),
+        };
+        
+        // Parse parameter list
+        self.consume(TokenType::LeftParen, "Expected '(' after function name")?;
+        let mut parameters = Vec::new();
+        
+        while !self.check(&TokenType::RightParen) && !self.is_at_end() {
+            if let TokenType::Identifier(param) = &self.advance().token_type {
+                parameters.push(param.clone());
+                if self.match_token(&TokenType::Comma) {
+                    continue;
+                }
+            } else {
+                return Err(CompilerError::parse(
+                    self.previous().line,
+                    "Expected parameter name"
+                ));
+            }
+        }
+        
+        self.consume(TokenType::RightParen, "Expected ')' after parameters")?;
+        
+        // Parse function body
+        self.consume(TokenType::LeftBrace, "Expected '{' for function body")?;
+        let body = self.parse_script_code()?;
+        
+        // Generate the full function code
+        let param_list = parameters.join(", ");
+        let full_code = format!("function {}({})\n{}\nend", function_name, param_list, body);
+        
+        // Return as a script node with the function name as the script name
+        Ok(AstNode::Script {
+            language,
+            name: Some(function_name.clone()),
+            source: ScriptSource::Inline(full_code),
+            mode: None,
+        })
     }
     
     fn parse_style(&mut self) -> Result<AstNode> {

@@ -30,6 +30,7 @@ pub enum TokenType {
     Include,
     Variables,
     Script,
+    Function,
     
     // Operators and punctuation
     LeftBrace,    // {
@@ -94,6 +95,7 @@ impl fmt::Display for TokenType {
             TokenType::Include => write!(f, "@include"),
             TokenType::Variables => write!(f, "@variables"),
             TokenType::Script => write!(f, "@script"),
+            TokenType::Function => write!(f, "@function"),
             TokenType::LeftBrace => write!(f, "{{"),
             TokenType::RightBrace => write!(f, "}}"),
             TokenType::LeftBracket => write!(f, "["),
@@ -252,6 +254,7 @@ impl Lexer {
                     "@include" => TokenType::Include,
                     "@variables" => TokenType::Variables,
                     "@script" => TokenType::Script,
+                    "@function" => TokenType::Function,
                     _ => return Err(CompilerError::parse(
                         self.line,
                         format!("Unknown directive: {}", directive)
