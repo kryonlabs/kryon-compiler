@@ -322,6 +322,26 @@ impl StyleResolver {
                     ));
                 }
             }
+            PropertyId::Visibility => {
+                // Handle visible/visibility property - convert boolean or string to boolean
+                let visible = match cleaned_value.to_lowercase().as_str() {
+                    "true" | "visible" | "1" => true,
+                    "false" | "hidden" | "0" => false,
+                    _ => {
+                        return Err(CompilerError::semantic(
+                            source_prop.line_num,
+                            format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', or 'hidden'", cleaned_value)
+                        ));
+                    }
+                };
+                
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![if visible { 1 } else { 0 }],
+                })
+            }
             PropertyId::Padding | PropertyId::Margin => {
                 // Parse edge insets (can be 1, 2, or 4 values)
                 let edge_insets = self.parse_edge_insets(&cleaned_value)?;
@@ -330,6 +350,32 @@ impl StyleResolver {
                     value_type: ValueType::EdgeInsets,
                     size: 4,
                     value: edge_insets.to_vec(),
+                })
+            }
+            PropertyId::Width | PropertyId::Height => {
+                // Handle width/height properties as u16 values
+                if let Ok(size) = cleaned_value.parse::<u16>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: size.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic(
+                        source_prop.line_num,
+                        format!("Invalid size value: {}", cleaned_value)
+                    ));
+                }
+            }
+            PropertyId::LayoutFlags => {
+                // Handle layout property (e.g., "row center", "column start")
+                let layout_byte = crate::utils::parse_layout_string(&cleaned_value)?;
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![layout_byte],
                 })
             }
             PropertyId::Invalid => None, // Skip invalid properties
@@ -406,6 +452,9 @@ impl StyleResolver {
             "z_index" => PropertyId::ZIndex,
             "visibility" => PropertyId::Visibility,
             "gap" => PropertyId::Gap,
+            "width" => PropertyId::Width,
+            "height" => PropertyId::Height,
+            "layout" => PropertyId::LayoutFlags,
             _ => PropertyId::Invalid,
         }
     }

@@ -89,6 +89,9 @@ impl PropertyId {
             "z_index" => PropertyId::ZIndex,                       // 0x0E
             "visibility" => PropertyId::Visibility,                // 0x0F
             "gap" => PropertyId::Gap,                              // 0x10
+            "width" => PropertyId::Width,                          // 0x19
+            "height" => PropertyId::Height,                        // 0x1A
+            "layout" => PropertyId::LayoutFlags,                   // 0x1C
             "min_width" => PropertyId::MinWidth,                   // 0x11
             "min_height" => PropertyId::MinHeight,                 // 0x12
             "max_width" => PropertyId::MaxWidth,                   // 0x13
@@ -149,8 +152,10 @@ pub enum PropertyId {
     Transform = 0x16,
     Shadow = 0x17,
     Overflow = 0x18,
-    CustomData = 0x19,
-    LayoutFlags = 0x1A,
+    Width = 0x19,
+    Height = 0x1A,
+    CustomData = 0x1B,
+    LayoutFlags = 0x1C,
     // App-specific properties
     WindowWidth = 0x20,
     WindowHeight = 0x21,

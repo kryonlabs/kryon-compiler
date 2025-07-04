@@ -521,6 +521,9 @@ impl SemanticAnalyzer {
             "z_index" => PropertyId::ZIndex,
             "visible" | "visibility" => PropertyId::Visibility,
             "gap" => PropertyId::Gap,
+            "width" => PropertyId::Width,
+            "height" => PropertyId::Height,
+            "layout" => PropertyId::LayoutFlags,
             "window_width" => PropertyId::WindowWidth,
             "window_height" => PropertyId::WindowHeight,
             "window_title" => PropertyId::WindowTitle,
@@ -535,7 +538,7 @@ impl SemanticAnalyzer {
             "window_title" | "window_width" | "window_height" | "window_min_width" |
             "window_min_height" | "window_max_width" | "window_max_height" |
             "resizable" | "keep_aspect_ratio" | "scale_factor" | "icon" |
-            "version" | "author" | "background_color" | "id" | "style" | "layout"
+            "version" | "author" | "background_color" | "id" | "style" | "layout" | "visible"
         )
     }
     
@@ -543,9 +546,9 @@ impl SemanticAnalyzer {
         matches!(key,
             "text" | "text_color" | "font_size" | "font_weight" | "font_family" |
             "text_alignment" | "line_height" | "text_decoration" | "text_transform" |
-            "id" | "pos_x" | "pos_y" | "width" | "height" | "style" |
+            "id" | "pos_x" | "pos_y" | "width" | "height" | "style" | "layout" |
             "background_color" | "border_color" | "border_width" | "border_radius" |
-            "padding" | "margin" | "opacity" | "visibility" | "z_index"
+            "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index"
         )
     }
     
@@ -565,9 +568,9 @@ impl SemanticAnalyzer {
     
     fn is_valid_image_property(&self, key: &str) -> bool {
         matches!(key,
-            "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" |
+            "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" | "layout" |
             "style" | "background_color" | "border_color" | "border_width" |
-            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "z_index"
+            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index"
         )
     }
     
@@ -576,7 +579,7 @@ impl SemanticAnalyzer {
             "layout" | "gap" | "id" | "pos_x" | "pos_y" | "width" | "height" |
             "min_width" | "min_height" | "max_width" | "max_height" |
             "style" | "background_color" | "border_color" | "border_width" |
-            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "z_index"
+            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index"
         )
     }
     

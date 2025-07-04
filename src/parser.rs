@@ -203,41 +203,99 @@ impl Parser {
     }
     
     fn parse_script_code(&mut self) -> Result<String> {
+        // Check if we have a ScriptContent token (new approach)
+        if let TokenType::ScriptContent(content) = &self.peek().token_type {
+            let content = content.clone();
+            self.advance(); // consume the ScriptContent token
+            // Also consume the closing brace that should follow
+            self.consume(TokenType::RightBrace, "Expected '}' after script content")?;
+            return Ok(content);
+        }
+        
+        // Fallback to old approach for compatibility
         let mut code = String::new();
         let mut brace_count = 1;
+        let mut last_was_space = false;
         
         while !self.is_at_end() && brace_count > 0 {
             match &self.advance().token_type {
                 TokenType::LeftBrace => {
                     brace_count += 1;
                     code.push('{');
+                    last_was_space = false;
                 }
                 TokenType::RightBrace => {
                     brace_count -= 1;
                     if brace_count > 0 {
                         code.push('}');
+                        last_was_space = false;
                     }
                 }
                 TokenType::String(s) => {
                     code.push_str(&format!("\"{}\"", s));
+                    last_was_space = false;
                 }
                 TokenType::Identifier(id) => {
+                    if !last_was_space && !code.is_empty() && !code.ends_with(|c: char| c.is_whitespace() || c == '(' || c == '{' || c == ',' || c == '=' || c == '.') {
+                        code.push(' ');
+                    }
                     code.push_str(id);
+                    last_was_space = false;
                 }
                 TokenType::Number(n) => {
+                    if !last_was_space && !code.is_empty() && !code.ends_with(|c: char| c.is_whitespace() || c == '(' || c == '{' || c == ',' || c == '=' || c == '.') {
+                        code.push(' ');
+                    }
                     code.push_str(&n.to_string());
+                    last_was_space = false;
                 }
                 TokenType::Integer(i) => {
+                    if !last_was_space && !code.is_empty() && !code.ends_with(|c: char| c.is_whitespace() || c == '(' || c == '{' || c == ',' || c == '=' || c == '.') {
+                        code.push(' ');
+                    }
                     code.push_str(&i.to_string());
+                    last_was_space = false;
                 }
                 TokenType::Newline => {
                     code.push('\n');
+                    last_was_space = true;
+                }
+                TokenType::Dot => {
+                    code.push('.');
+                    last_was_space = false;
+                }
+                TokenType::LeftParen => {
+                    code.push('(');
+                    last_was_space = false;
+                }
+                TokenType::RightParen => {
+                    code.push(')');
+                    last_was_space = false;
+                }
+                TokenType::Comma => {
+                    code.push(',');
+                    last_was_space = false;
+                }
+                TokenType::Equals => {
+                    code.push_str(" = ");
+                    last_was_space = true;
+                }
+                TokenType::Comment(comment) => {
+                    code.push_str(&format!("--{}", comment));
+                    last_was_space = false;
                 }
                 token => {
-                    code.push_str(&format!("{}", token));
+                    // Handle any other tokens by converting to string
+                    let token_str = format!("{}", token);
+                    if !token_str.is_empty() {
+                        if !last_was_space && !code.is_empty() && !code.ends_with(|c: char| c.is_whitespace()) {
+                            code.push(' ');
+                        }
+                        code.push_str(&token_str);
+                        last_was_space = false;
+                    }
                 }
             }
-            code.push(' ');
         }
         
         Ok(code.trim().to_string())
@@ -637,17 +695,62 @@ impl Parser {
                 Ok(value_parts.join(" "))
             }
             TokenType::Dollar => {
+                // Parse variable expressions like $var or $var == 0
+                let mut expression_parts = vec!["$".to_string()];
                 self.advance(); // Consume the '$'
+                
+                // Get the variable name
                 if let TokenType::Identifier(name) = &self.peek().token_type {
-                    let value = format!("${}", name);
+                    expression_parts.push(name.clone());
                     self.advance();
-                    Ok(value)
                 } else {
-                    Err(CompilerError::parse(
+                    return Err(CompilerError::parse(
                         self.peek().line,
                         "Expected variable name after '$'"
-                    ))
+                    ));
                 }
+                
+                // Check for operators and continue expression
+                while !self.is_at_end() {
+                    match &self.peek().token_type {
+                        TokenType::Equals => {
+                            self.advance(); // consume first =
+                            // Check for double equals
+                            if self.check(&TokenType::Equals) {
+                                expression_parts.push("==".to_string());
+                                self.advance(); // consume second =
+                            } else {
+                                expression_parts.push("=".to_string());
+                            }
+                        }
+                        TokenType::Integer(i) => {
+                            expression_parts.push(i.to_string());
+                            self.advance();
+                        }
+                        TokenType::Number(n) => {
+                            expression_parts.push(n.to_string());
+                            self.advance();
+                        }
+                        TokenType::Boolean(b) => {
+                            expression_parts.push(b.to_string());
+                            self.advance();
+                        }
+                        TokenType::String(s) => {
+                            expression_parts.push(format!("\"{}\"", s));
+                            self.advance();
+                        }
+                        TokenType::Identifier(id) => {
+                            expression_parts.push(id.clone());
+                            self.advance();
+                        }
+                        TokenType::Newline | TokenType::Semicolon | TokenType::RightBrace => {
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                
+                Ok(expression_parts.join(" "))
             }
             _ => Err(CompilerError::parse(
                 self.peek().line,

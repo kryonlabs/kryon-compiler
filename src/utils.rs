@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// Variable processor for handling @variables blocks
 pub struct VariableProcessor {
     var_usage_regex: Regex,
+    var_expression_regex: Regex,
 }
 
 
@@ -18,6 +19,7 @@ impl VariableProcessor {
     pub fn new() -> Self {
         Self {
             var_usage_regex: Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap(),
+            var_expression_regex: Regex::new(r#"\$([a-zA-Z_][a-zA-Z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*([0-9]+|true|false|"[^"]*")"#).unwrap(),
         }
     }
 
@@ -223,8 +225,23 @@ impl VariableProcessor {
                 continue; // Skip lines inside @variables blocks
             }
 
-            // Perform variable substitution on lines outside @variables blocks
-            let substituted_line = self.var_usage_regex.replace_all(line, |caps: &regex::Captures| {
+            // First, handle expressions (like $var == 0)
+            let expr_substituted_line = self.var_expression_regex.replace_all(line, |caps: &regex::Captures| {
+                let var_name = &caps[1];
+                let operator = &caps[2];
+                let value = &caps[3];
+                
+                match self.evaluate_expression(var_name, operator, value, state) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        substitution_errors.push(format!("Line {}: {}", line_num, e));
+                        caps[0].to_string() // Return original if error
+                    }
+                }
+            });
+
+            // Then handle simple variable substitution on lines outside @variables blocks
+            let substituted_line = self.var_usage_regex.replace_all(&expr_substituted_line, |caps: &regex::Captures| {
 
                 let var_name = &caps[1];
                 
@@ -256,6 +273,65 @@ impl VariableProcessor {
         }
 
         Ok(result)
+    }
+
+    /// Evaluate expressions like $var == 0, $var != "test", etc.
+    fn evaluate_expression(&self, var_name: &str, operator: &str, value: &str, state: &CompilerState) -> Result<String> {
+        // Get the variable value
+        let var_value = match state.variables.get(var_name) {
+            Some(var_def) if var_def.is_resolved => &var_def.value,
+            Some(_) => return Err(CompilerError::variable(0, format!("Variable '{}' not resolved", var_name))),
+            None => return Err(CompilerError::variable(0, format!("Undefined variable '{}'", var_name))),
+        };
+
+        // Parse the comparison value
+        let comparison_value = if value.starts_with('"') && value.ends_with('"') {
+            // String value
+            value[1..value.len()-1].to_string()
+        } else if value == "true" || value == "false" {
+            // Boolean value
+            value.to_string()
+        } else {
+            // Numeric value
+            value.to_string()
+        };
+
+        // Perform comparison
+        let result = match operator {
+            "==" => var_value == &comparison_value,
+            "!=" => var_value != &comparison_value,
+            "<" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num < comp_num
+                } else {
+                    var_value < &comparison_value
+                }
+            },
+            ">" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num > comp_num
+                } else {
+                    var_value > &comparison_value
+                }
+            },
+            "<=" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num <= comp_num
+                } else {
+                    var_value <= &comparison_value
+                }
+            },
+            ">=" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num >= comp_num
+                } else {
+                    var_value >= &comparison_value
+                }
+            },
+            _ => return Err(CompilerError::variable(0, format!("Unknown operator: {}", operator))),
+        };
+
+        Ok(result.to_string())
     }
 
     /// Strip trailing comments from a line, respecting quotes

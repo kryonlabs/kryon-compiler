@@ -45,6 +45,7 @@ pub enum TokenType {
     Equals,       // =
     Ampersand,    // &
     Dollar,       // $
+    Dot,          // .
     
     // Pseudo-selector
     PseudoSelector, // &:hover, &:active, etc.
@@ -56,6 +57,7 @@ pub enum TokenType {
     Boolean(bool),
     Color(String), // #RGB, #RRGGBB, #RRGGBBAA
     Identifier(String),
+    ScriptContent(String), // Raw script content inside @function or @script blocks
     
     // Special
     Newline,
@@ -108,6 +110,7 @@ impl fmt::Display for TokenType {
             TokenType::Equals => write!(f, "="),
             TokenType::Ampersand => write!(f, "&"),
             TokenType::Dollar => write!(f, "$"),
+            TokenType::Dot => write!(f, "."),
             TokenType::PseudoSelector => write!(f, "pseudo-selector"),
             TokenType::String(s) => write!(f, "string(\"{}\")", s),
             TokenType::Number(n) => write!(f, "number({})", n),
@@ -115,6 +118,7 @@ impl fmt::Display for TokenType {
             TokenType::Boolean(b) => write!(f, "boolean({})", b),
             TokenType::Color(c) => write!(f, "color({})", c),
             TokenType::Identifier(id) => write!(f, "identifier({})", id),
+            TokenType::ScriptContent(content) => write!(f, "script_content({})", content),
             TokenType::Newline => write!(f, "newline"),
             TokenType::Comment(c) => write!(f, "comment({})", c),
             TokenType::Eof => write!(f, "EOF"),
@@ -128,6 +132,9 @@ pub struct Lexer {
     line: usize,
     column: usize,
     filename: String,
+    
+    // Store original source for script content reading
+    source: String,
     
     // Regex patterns for complex tokens
     color_regex: Regex,
@@ -143,6 +150,7 @@ impl Lexer {
             line: 1,
             column: 1,
             filename,
+            source: input.to_string(),
             color_regex: Regex::new(r"^#[0-9A-Fa-f]{3,8}$").unwrap(),
             identifier_regex: Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap(),
             pseudo_selector_regex: Regex::new(r"^&:(hover|active|focus|disabled|checked)$").unwrap(),
@@ -151,9 +159,42 @@ impl Lexer {
     
     pub fn tokenize(&mut self) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
+        let mut pending_script_function = false;
         
         while !self.is_at_end() {
             if let Some(token) = self.next_token()? {
+                // Check if we just encountered @function
+                if matches!(token.token_type, TokenType::Function) {
+                    pending_script_function = true;
+                    tokens.push(token);
+                    continue;
+                }
+                
+                // If we're pending a script function and hit opening brace, switch to script mode
+                if pending_script_function && matches!(token.token_type, TokenType::LeftBrace) {
+                    pending_script_function = false;
+                    tokens.push(token); // Add the opening brace
+                    
+                    // Now read script content as raw text
+                    let script_content = self.read_script_content()?;
+                    tokens.push(Token {
+                        token_type: TokenType::ScriptContent(script_content),
+                        line: self.line,
+                        column: self.column,
+                        filename: self.filename.clone(),
+                    });
+                    
+                    // The closing brace is consumed by read_script_content, no need to add it again
+                    // (The next token from next_token() will be whatever comes after the function)
+                    
+                    continue;
+                }
+                
+                // Reset pending flag if we hit anything else that indicates we're not in a function signature
+                if pending_script_function && !matches!(token.token_type, TokenType::String(_) | TokenType::Identifier(_) | TokenType::LeftParen | TokenType::RightParen | TokenType::Comma | TokenType::Newline) {
+                    pending_script_function = false;
+                }
+                
                 tokens.push(token);
             }
         }
@@ -204,6 +245,18 @@ impl Lexer {
             ',' => TokenType::Comma,
             '=' => TokenType::Equals,
             '$' => TokenType::Dollar,
+            '.' => {
+                // Check if this is part of a number (e.g., .5) or standalone dot
+                if self.peek().map_or(false, |c| c.is_ascii_digit()) {
+                    // This is a decimal number starting with .
+                    let number_str = self.read_number(ch)?;
+                    TokenType::Number(number_str.parse().map_err(|_| {
+                        CompilerError::parse(self.line, format!("Invalid number: {}", number_str))
+                    })?)
+                } else {
+                    TokenType::Dot
+                }
+            }
             '&' => {
                 if self.peek() == Some(':') {
                     // Handle pseudo-selectors like &:hover
@@ -253,8 +306,14 @@ impl Lexer {
                 match directive.as_str() {
                     "@include" => TokenType::Include,
                     "@variables" => TokenType::Variables,
-                    "@script" => TokenType::Script,
-                    "@function" => TokenType::Function,
+                    "@script" => {
+                        // For @script, we need to read the script content specially
+                        TokenType::Script
+                    },
+                    "@function" => {
+                        // For @function, we need to read the script content specially
+                        TokenType::Function
+                    },
                     _ => return Err(CompilerError::parse(
                         self.line,
                         format!("Unknown directive: {}", directive)
@@ -272,6 +331,10 @@ impl Lexer {
                         CompilerError::parse(self.line, format!("Invalid integer: {}", number_str))
                     })?)
                 }
+            }
+            '-' => {
+                // Handle minus sign (for script content like Lua comments --)
+                TokenType::Identifier("-".to_string())
             }
             ch if ch.is_alphabetic() || ch == '_' => {
                 let identifier = self.read_identifier(ch)?;
@@ -539,6 +602,45 @@ impl Lexer {
             // Default to identifier
             _ => TokenType::Identifier(text),
         }
+    }
+    
+    // Public method that can be called by the parser to read script content
+    pub fn read_script_content(&mut self) -> Result<String> {
+        let mut content = String::new();
+        let mut brace_count = 1; // Assume we've already consumed the opening brace
+        
+        // Read everything until we find the matching closing brace
+        while let Some(ch) = self.peek() {
+            if ch == '{' {
+                brace_count += 1;
+                content.push(ch);
+                self.advance();
+            } else if ch == '}' {
+                brace_count -= 1;
+                if brace_count == 0 {
+                    // DON'T consume the closing brace - let the tokenizer handle it normally
+                    break;
+                } else {
+                    content.push(ch);
+                    self.advance();
+                }
+            } else {
+                content.push(ch);
+                if ch == '\n' {
+                    self.line += 1;
+                }
+                self.advance();
+            }
+        }
+        
+        if brace_count > 0 {
+            return Err(CompilerError::parse(
+                self.line,
+                "Unclosed script block - missing '}'"
+            ));
+        }
+        
+        Ok(content)
     }
 }
 
