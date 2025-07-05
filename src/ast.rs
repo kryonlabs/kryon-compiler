@@ -38,6 +38,7 @@ pub enum AstNode {
         name: String,
         extends: Vec<String>,
         properties: Vec<AstProperty>,
+        pseudo_selectors: Vec<PseudoSelector>,
     },
     
     /// Define component

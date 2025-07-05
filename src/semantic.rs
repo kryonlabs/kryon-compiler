@@ -71,10 +71,10 @@ impl SemanticAnalyzer {
     }
     
     fn collect_style_definition(&mut self, ast: &AstNode, state: &mut CompilerState) -> Result<()> {
-        if let AstNode::Style { name, extends, properties } = ast {
+        if let AstNode::Style { name, extends, properties, pseudo_selectors: _ } = ast {
             // Check for duplicate style names
             if state.styles.iter().any(|s| s.source_name == *name) {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Style '{}' is already defined", name)
                 ));
@@ -115,7 +115,7 @@ impl SemanticAnalyzer {
         if let AstNode::Component { name, properties, template } = ast {
             // Check for duplicate component names
             if state.component_defs.iter().any(|c| c.name == *name) {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Component '{}' is already defined", name)
                 ));
@@ -189,7 +189,7 @@ impl SemanticAnalyzer {
         
         if resolving.contains(&style_index) {
             let style_name = &state.styles[style_index].source_name;
-            return Err(CompilerError::semantic(
+            return Err(CompilerError::semantic_legacy(
                 0,
                 format!("Circular dependency in style inheritance involving '{}'", style_name)
             ));
@@ -205,7 +205,7 @@ impl SemanticAnalyzer {
             if let Some(base_index) = state.styles.iter().position(|s| s.source_name == *base_style_name) {
                 self.resolve_style_recursive(base_index, state, resolved, resolving)?;
             } else {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Style '{}' extends undefined style '{}'", 
                            state.styles[style_index].source_name, base_style_name)
@@ -342,7 +342,7 @@ impl SemanticAnalyzer {
         };
         
         if !is_valid {
-            return Err(CompilerError::semantic(
+            return Err(CompilerError::semantic_legacy(
                 prop.line,
                 format!("Property '{}' is not valid for element type '{}'", prop.key, element_type)
             ));
@@ -358,7 +358,7 @@ impl SemanticAnalyzer {
         match key {
             key if key.contains("color") => {
                 if !value.starts_with('#') && !value.starts_with('$') && !value.starts_with('"') {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         line,
                         format!("Color property '{}' must be a hex color (#RGB), variable ($var), or string", key)
                     ));
@@ -367,7 +367,7 @@ impl SemanticAnalyzer {
             key if key.contains("width") || key.contains("height") || key.contains("size") => {
                 if !value.chars().all(|c| c.is_ascii_digit()) && 
                    !value.starts_with('$') && !value.starts_with('"') {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         line,
                         format!("Size property '{}' must be a number, variable, or string", key)
                     ));
@@ -398,19 +398,19 @@ impl SemanticAnalyzer {
         // Some basic validation rules
         match (parent_type, child_type) {
             ("Text", _) => {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Text elements cannot contain child elements, found '{}'", child_type)
                 ));
             }
             ("Input", _) => {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Input elements cannot contain child elements, found '{}'", child_type)
                 ));
             }
             ("Image", _) => {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Image elements cannot contain child elements, found '{}'", child_type)
                 ));
@@ -458,7 +458,7 @@ impl SemanticAnalyzer {
                         value: color.to_bytes().to_vec(),
                     })
                 } else {
-                    Err(CompilerError::semantic(
+                    Err(CompilerError::semantic_legacy(
                         prop.line_num,
                         format!("Invalid color value: {}", cleaned_value)
                     ))
@@ -485,11 +485,59 @@ impl SemanticAnalyzer {
                         value: vec![val],
                     })
                 } else {
-                    Err(CompilerError::semantic(
+                    Err(CompilerError::semantic_legacy(
                         prop.line_num,
                         format!("Invalid numeric value: {}", cleaned_value)
                     ))
                 }
+            }
+            PropertyId::LayoutFlags => {
+                // Handle layout property (e.g., "row center", "column start")
+                let layout_byte = crate::utils::parse_layout_string(&cleaned_value).map_err(|e| {
+                    CompilerError::semantic_legacy(prop.line_num, format!("Invalid layout value: {}", e))
+                })?;
+                Ok(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![layout_byte],
+                })
+            }
+            PropertyId::Width | PropertyId::Height => {
+                // Handle width/height properties as u16 values
+                if let Ok(size) = cleaned_value.parse::<u16>() {
+                    Ok(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: size.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    Err(CompilerError::semantic_legacy(
+                        prop.line_num,
+                        format!("Invalid size value: {}", cleaned_value)
+                    ))
+                }
+            }
+            PropertyId::Visibility => {
+                // Handle visible/visibility property - convert boolean or string to boolean
+                let visible = match cleaned_value.to_lowercase().as_str() {
+                    "true" | "visible" | "1" => true,
+                    "false" | "hidden" | "0" => false,
+                    _ => {
+                        return Err(CompilerError::semantic_legacy(
+                            prop.line_num,
+                            format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', or 'hidden'", cleaned_value)
+                        ));
+                    }
+                };
+                
+                Ok(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![if visible { 1 } else { 0 }],
+                })
             }
             _ => {
                 // Default handling - store as custom property
@@ -504,33 +552,7 @@ impl SemanticAnalyzer {
     }
     
     fn get_property_id(&self, key: &str) -> PropertyId {
-        match key {
-            "background_color" => PropertyId::BackgroundColor,
-            "text_color" | "foreground_color" => PropertyId::ForegroundColor,
-            "border_color" => PropertyId::BorderColor,
-            "border_width" => PropertyId::BorderWidth,
-            "border_radius" => PropertyId::BorderRadius,
-            "padding" => PropertyId::Padding,
-            "margin" => PropertyId::Margin,
-            "text" => PropertyId::TextContent,
-            "font_size" => PropertyId::FontSize,
-            "font_weight" => PropertyId::FontWeight,
-            "text_alignment" => PropertyId::TextAlignment,
-            "src" | "image_source" => PropertyId::ImageSource,
-            "opacity" => PropertyId::Opacity,
-            "z_index" => PropertyId::ZIndex,
-            "visible" | "visibility" => PropertyId::Visibility,
-            "gap" => PropertyId::Gap,
-            "width" => PropertyId::Width,
-            "height" => PropertyId::Height,
-            "layout" => PropertyId::LayoutFlags,
-            "window_width" => PropertyId::WindowWidth,
-            "window_height" => PropertyId::WindowHeight,
-            "window_title" => PropertyId::WindowTitle,
-            "resizable" => PropertyId::Resizable,
-            "cursor" => PropertyId::Cursor,
-            _ => PropertyId::CustomData,
-        }
+        PropertyId::from_name(key)
     }
 
     fn is_valid_app_property(&self, key: &str) -> bool {
@@ -555,7 +577,7 @@ impl SemanticAnalyzer {
     fn is_valid_button_property(&self, key: &str) -> bool {
         self.is_valid_text_property(key) || matches!(key,
             "disabled" | "onClick" | "onPress" | "onRelease" | "onHover" |
-            "onFocus" | "onBlur" | "cursor"
+            "onFocus" | "onBlur" | "cursor" | "checked"
         )
     }
     

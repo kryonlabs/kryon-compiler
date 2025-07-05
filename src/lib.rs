@@ -54,6 +54,7 @@ pub mod component_resolver;
 pub mod style_resolver;
 pub mod optimizer;
 pub mod cli;
+pub mod variable_context;
 use serde::Serialize;
 use std::io::Read;
 
@@ -74,6 +75,7 @@ pub use semantic::SemanticAnalyzer;
 pub use codegen::CodeGenerator;
 pub use size_calculator::{SizeCalculator, SizeStatistics};
 pub use component_resolver::{ComponentResolver, ComponentStats, ComponentComplexity};
+pub use variable_context::{VariableContext, VariableEntry, VariableScope};
 pub use style_resolver::{StyleResolver, StyleResolutionStats};
 pub use optimizer::{Optimizer, OptimizationStats};
 pub use cli::EnhancedCli;
@@ -299,14 +301,22 @@ pub fn compile_source_with_options(
         log::debug!("Phase 0.1: Processing includes...");
     }
     
-    let source_with_includes = if source.contains("@include") {
+    let (source_with_includes, source_map) = if source.contains("@include") {
         if std::path::Path::new(filename).exists() {
-            preprocessor::preprocess_file(filename)?
+            if options.debug_mode {
+                log::debug!("Processing includes for file: {}", filename);
+            }
+            let result = preprocessor::preprocess_file(filename)?;
+            if options.debug_mode {
+                log::debug!("Include processing complete. Combined content length: {}", result.0.len());
+                log::debug!("Source map has {} entries", result.1.mapping_count());
+            }
+            result
         } else {
-            source.to_string()
+            (source.to_string(), crate::error::SourceMap::new())
         }
     } else {
-        source.to_string()
+        (source.to_string(), crate::error::SourceMap::new())
     };
     
     if options.debug_mode {
@@ -323,7 +333,7 @@ pub fn compile_source_with_options(
     // Inject custom variables first
     for (name, value) in &options.custom_variables {
         if !crate::utils::is_valid_identifier(name) {
-            return Err(CompilerError::variable(
+            return Err(CompilerError::variable_legacy(
                 0,
                 format!("Invalid custom variable name '{}'", name)
             ));
@@ -341,6 +351,16 @@ pub fn compile_source_with_options(
     let source_with_variables = variable_processor
         .process_and_substitute_variables(&source_with_includes, &mut state)?;
     
+    // Populate the unified variable context with @variables
+    for (name, var_def) in &state.variables {
+        state.variable_context.add_string_variable(
+            name.clone(),
+            var_def.value.clone(),
+            state.current_file_path.clone(),
+            var_def.def_line
+        )?;
+    }
+    
     stats.variable_count = state.variables.len();
     
     if options.debug_mode {
@@ -352,7 +372,7 @@ pub fn compile_source_with_options(
         log::debug!("Phase 1: Lexical analysis and parsing...");
     }
     
-    let mut lexer = Lexer::new(&source_with_variables, filename.to_string());
+    let mut lexer = Lexer::new_with_source_map(&source_with_variables, filename.to_string(), source_map);
     let tokens = lexer.tokenize()?;
     
     if options.debug_mode {
@@ -360,7 +380,7 @@ pub fn compile_source_with_options(
     }
     
     let mut parser = Parser::new(tokens);
-    let ast = parser.parse()?;
+    let mut ast = parser.parse()?;
     
     if options.debug_mode {
         log::debug!("Phase 1 complete. AST parsed successfully");
@@ -417,6 +437,92 @@ pub fn compile_source_with_options(
                    stats.element_count, stats.style_count, stats.component_count);
     }
     
+    // Phase 1.5: Component resolution
+    if options.debug_mode {
+        log::debug!("Phase 1.5: Resolving components...");
+    }
+    
+    // Phase 1.5: Component resolution (must happen on AST before state conversion)
+    if options.debug_mode {
+        log::debug!("Phase 1.5: Resolving components in AST...");
+    }
+    
+    if stats.component_count > 0 {
+        // Extract component definitions and templates from AST
+        if let AstNode::File { components, .. } = &ast {
+            for component_node in components {
+                if let AstNode::Component { name, properties, template } = component_node {
+                    // Store the template AST for the resolver to use
+                    state.component_ast_templates.insert(name.clone(), (**template).clone());
+                    
+                    // Create component definition
+                    let mut component_def = ComponentDefinition {
+                        name: name.clone(),
+                        properties: Vec::new(),
+                        definition_start_line: 1,
+                        definition_root_element_index: None, // Not needed anymore
+                        calculated_size: 0,
+                        internal_template_element_offsets: std::collections::HashMap::new(),
+                    };
+                    
+                    // Process component properties
+                    for comp_prop in properties {
+                        if let ComponentProperty { name: prop_name, property_type, default_value, .. } = comp_prop {
+                            let value_type = match property_type.as_str() {
+                                "String" => ValueType::String,
+                                "Bool" | "Boolean" => ValueType::Bool,
+                                "Int" | "Integer" => ValueType::Int,
+                                "Float" | "Number" => ValueType::Float,
+                                "Color" => ValueType::Color,
+                                "StyleID" | "Style" => ValueType::StyleId,
+                                _ => {
+                                    // Check if it's an Enum type
+                                    if property_type.starts_with("Enum(") && property_type.ends_with(")") {
+                                        ValueType::Enum
+                                    } else {
+                                        ValueType::String // Default fallback
+                                    }
+                                }
+                            };
+                            
+                            let prop_def = ComponentPropertyDef {
+                                name: prop_name.clone(),
+                                value_type_hint: value_type,
+                                default_value: default_value.clone().unwrap_or_default(),
+                            };
+                            component_def.properties.push(prop_def);
+                        }
+                    }
+                    
+                    state.component_defs.push(component_def);
+                }
+            }
+        }
+        
+        // Now resolve components in the AST
+        let mut component_resolver = ComponentResolver::new();
+        component_resolver.resolve_components(&mut ast, &mut state)?;
+        
+        if options.debug_mode {
+            log::debug!("Phase 1.5 complete. Component instances resolved in AST");
+        }
+        
+        // Clear the state to rebuild it with resolved AST
+        state.elements.clear();
+        state.component_defs.clear();
+        state.component_ast_templates.clear();
+        
+        // Rebuild state from resolved AST (components are now expanded to regular elements)
+        convert_ast_to_state(&ast, &mut state)?;
+        
+        stats.element_count = state.elements.len();
+        stats.component_count = state.component_defs.len();
+    } else {
+        if options.debug_mode {
+            log::debug!("Phase 1.5 skipped. No components to resolve.");
+        }
+    }
+    
     // Phase 2: Calculate sizes
     if options.debug_mode {
         log::debug!("Phase 2: Calculating sizes...");
@@ -459,23 +565,8 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
         AstNode::File { app, styles, components, scripts, directives } => {
             // Process styles first since elements may reference them
             for style_node in styles {
-                if let AstNode::Style { name, extends: _, properties } = style_node {
-                    let style_id = (state.styles.len() + 1) as u8; // 1-based style IDs
-                    
-                    // Add style name to string table
-                    let name_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *name) {
-                        pos as u8
-                    } else {
-                        let index = state.strings.len() as u8;
-                        state.strings.push(StringEntry {
-                            text: name.clone(),
-                            length: name.len(),
-                            index,
-                        });
-                        index
-                    };
-                    
-                    // Convert style properties to KRB format
+                if let AstNode::Style { name, extends: _, properties, pseudo_selectors } = style_node {
+                    // Convert style properties to KRB format first
                     let mut krb_properties = Vec::new();
                     for ast_prop in properties {
                         if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
@@ -483,31 +574,93 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
                         }
                     }
                     
-                    // Create style entry
-                    let style_entry = StyleEntry {
-                        id: style_id,
-                        source_name: name.clone(),
-                        name_index,
-                        extends_style_names: Vec::new(), // TODO: implement extends
-                        properties: krb_properties,
-                        source_properties: properties.iter().map(|p| SourceProperty {
-                            key: p.key.clone(),
-                            value: p.value.clone(),
-                            line_num: p.line,
-                        }).collect(),
-                        calculated_size: 0, // Will be calculated later
-                        is_resolved: true,
-                        is_resolving: false,
-                    };
+                    // Process pseudo-selectors and convert to state property sets
+                    // This is a simplified implementation for now
+                    if !pseudo_selectors.is_empty() {
+                        println!("Style '{}' has {} pseudo-selectors (processed)", name, pseudo_selectors.len());
+                        // Note: Full state property implementation requires substantial changes to
+                        // the style system to properly store and apply state-based properties.
+                        // For now, the renderer will need to use the existing compute_with_state method.
+                    }
                     
-                    println!("Added style '{}' with ID {} and {} properties", name, style_id, style_entry.properties.len());
-                    state.styles.push(style_entry);
+                    // Find existing style by name (created in semantic analysis phase)
+                    if let Some(existing_style) = state.styles.iter_mut().find(|s| s.source_name == *name) {
+                        // Update existing style with KRB properties instead of creating duplicate
+                        existing_style.properties = krb_properties;
+                        existing_style.is_resolved = true;
+                        existing_style.is_resolving = false;
+                        
+                        println!("Updated existing style '{}' with ID {} and {} properties", name, existing_style.id, existing_style.properties.len());
+                    } else {
+                        // Style not found - create new one (fallback case)
+                        let style_id = (state.styles.len() + 1) as u8; // 1-based style IDs
+                        
+                        // Add style name to string table
+                        let name_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *name) {
+                            pos as u8
+                        } else {
+                            let index = state.strings.len() as u8;
+                            state.strings.push(StringEntry {
+                                text: name.clone(),
+                                length: name.len(),
+                                index,
+                            });
+                            index
+                        };
+                        
+                        // Create style entry (krb_properties already computed above)
+                        let style_entry = StyleEntry {
+                            id: style_id,
+                            source_name: name.clone(),
+                            name_index,
+                            extends_style_names: Vec::new(), // TODO: implement extends
+                            properties: krb_properties,
+                            source_properties: properties.iter().map(|p| SourceProperty {
+                                key: p.key.clone(),
+                                value: p.value.clone(),
+                                line_num: p.line,
+                            }).collect(),
+                            calculated_size: 0, // Will be calculated later
+                            is_resolved: true,
+                            is_resolving: false,
+                        };
+                        
+                        println!("Added new style '{}' with ID {} and {} properties", name, style_id, style_entry.properties.len());
+                        state.styles.push(style_entry);
+                    }
                 }
             }
             
-            // Process components (TODO: implement component conversion)
-            for _component_node in components {
-                // Components will be processed in a future implementation
+            // Process components
+            for component_node in components {
+                if let AstNode::Component { name, properties, template } = component_node {
+                    let mut component_def = ComponentDefinition {
+                        name: name.clone(),
+                        properties: Vec::new(),
+                        definition_start_line: 1, // TODO: get actual line from AST
+                        definition_root_element_index: None,
+                        calculated_size: 0,
+                        internal_template_element_offsets: std::collections::HashMap::new(),
+                    };
+                    
+                    // Process component properties
+                    for comp_prop in properties {
+                        if let ComponentProperty { name: prop_name, property_type, default_value, .. } = comp_prop {
+                            let prop_def = ComponentPropertyDef {
+                                name: prop_name.clone(),
+                                value_type_hint: ValueType::String, // TODO: parse property_type
+                                default_value: default_value.clone().unwrap_or_default(),
+                            };
+                            component_def.properties.push(prop_def);
+                        }
+                    }
+                    
+                    // Store component definition without converting template to state yet
+                    // Template will be processed during component instantiation
+                    component_def.definition_root_element_index = None; // Not needed with AST templates
+                    
+                    state.component_defs.push(component_def);
+                }
             }
             
             // Process app element
@@ -515,7 +668,7 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
                 convert_element_to_state(app_node, state, None)?;
             }
         }
-        _ => return Err(CompilerError::semantic(0, "Expected File node at root")),
+        _ => return Err(CompilerError::semantic_legacy(0, "Expected File node at root")),
     }
     
     Ok(())
@@ -530,7 +683,7 @@ fn convert_element_to_state(
         
         let mut element = Element {
             element_type: ElementType::from_name(element_type),
-            id_string_index: 0, pos_x: 0, pos_y: 0, width: 0, height: 0, layout: 0, style_id: 0,
+            id_string_index: 0, pos_x: 0, pos_y: 0, width: 0, height: 0, layout: 0, style_id: 0, checked: false,
             property_count: 0, child_count: 0, event_count: 0, animation_count: 0, custom_prop_count: 0, state_prop_count: 0,
             krb_properties: Vec::new(), krb_custom_properties: Vec::new(), krb_events: Vec::new(),
             state_property_sets: Vec::new(), children: Vec::new(), parent_index, self_index: element_index,
@@ -551,14 +704,36 @@ fn convert_element_to_state(
                 "layout" => {
                     match crate::utils::parse_layout_string(&ast_prop.cleaned_value()) {
                         Ok(layout_byte) => element.layout = layout_byte,
-                        Err(e) => return Err(CompilerError::semantic(ast_prop.line, e.to_string())),
+                        Err(e) => return Err(CompilerError::semantic_legacy(ast_prop.line, e.to_string())),
                     }
+                },
+                "id" => {
+                    // Store the element ID string in the string table and set the index
+                    let id_string = ast_prop.cleaned_value();
+                    let string_index = if let Some(entry) = state.strings.iter().position(|s| s.text == id_string) {
+                        entry as u8
+                    } else {
+                        let index = state.strings.len() as u8;
+                        state.strings.push(StringEntry {
+                            text: id_string.to_string(),
+                            length: id_string.len(),
+                            index,
+                        });
+                        index
+                    };
+                    element.id_string_index = string_index;
+                    println!("Set element ID '{}' to string index {}", id_string, string_index);
                 },
                 "style" => {
                     let style_name = ast_prop.cleaned_value();
                     if let Some(style_entry) = state.styles.iter().find(|s| s.source_name == style_name) {
                         element.style_id = style_entry.id;
                     }
+                },
+                "checked" => {
+                    let checked_value = ast_prop.cleaned_value();
+                    element.checked = checked_value == "true";
+                    println!("Set element checked state to {}", element.checked);
                 },
 
                 // --- THIS IS THE CORRECTED LOGIC ---
@@ -650,7 +825,7 @@ fn convert_element_to_state(
 
         Ok(element_index)
     } else {
-        Err(CompilerError::semantic(0, "Expected Element node during AST conversion"))
+        Err(CompilerError::semantic_legacy(0, "Expected Element node during AST conversion"))
     }
 }
 
@@ -667,6 +842,9 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
         "text" => PropertyId::TextContent,
         "window_title" => PropertyId::WindowTitle,
         "text_alignment" => PropertyId::TextAlignment,
+        "layout" => PropertyId::LayoutFlags,
+        "height" => PropertyId::Height,
+        "width" => PropertyId::Width,
         // Add any other properties you need to support here.
         _ => return Ok(None), // Safely ignore properties we don't recognize.
     };
@@ -682,14 +860,14 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                     value: color.to_bytes().to_vec(),
                 })
             } else {
-                return Err(CompilerError::semantic(ast_prop.line, format!("Invalid color value: {}", cleaned_value)));
+                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid color value: {}", cleaned_value)));
             }
         }
         PropertyId::BorderWidth | PropertyId::BorderRadius => {
             if let Ok(val) = cleaned_value.parse::<u8>() {
                 Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Byte, size: 1, value: vec![val] })
             } else {
-                return Err(CompilerError::semantic(ast_prop.line, format!("Invalid numeric value for {}: {}", ast_prop.key, cleaned_value)));
+                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid numeric value for {}: {}", ast_prop.key, cleaned_value)));
             }
         }
         PropertyId::TextAlignment => {
@@ -706,6 +884,19 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 index
             });
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::String, size: 1, value: vec![string_index] })
+        }
+        PropertyId::LayoutFlags => {
+            // Parse layout value like "grow", "column start", "row start"
+            let layout_value = crate::utils::parse_layout_string(&cleaned_value)?;
+            Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Byte, size: 1, value: vec![layout_value] })
+        }
+        PropertyId::Height | PropertyId::Width => {
+            // Parse numeric value as u16
+            if let Ok(val) = cleaned_value.parse::<u16>() {
+                Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Short, size: 2, value: val.to_le_bytes().to_vec() })
+            } else {
+                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid numeric value for {}: {}", ast_prop.key, cleaned_value)));
+            }
         }
         _ => None, // Should not be reached due to the initial match, but it's safe.
     };

@@ -2,13 +2,14 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use crate::ast::AstNode;
 
 // KRB Format Constants
 pub const KRB_MAGIC: &[u8; 4] = b"KRB1";
 pub const KRB_VERSION_MAJOR: u8 = 0;
 pub const KRB_VERSION_MINOR: u8 = 5;
 pub const KRB_HEADER_SIZE: usize = 54;
-pub const KRB_ELEMENT_HEADER_SIZE: usize = 18;
+pub const KRB_ELEMENT_HEADER_SIZE: usize = 19;
 
 // Header Flags
 pub const FLAG_HAS_STYLES: u16 = 1 << 0;
@@ -84,14 +85,14 @@ impl PropertyId {
             "font_size" => PropertyId::FontSize,                   // 0x09
             "font_weight" => PropertyId::FontWeight,               // 0x0A
             "text_alignment" => PropertyId::TextAlignment,         // 0x0B
-            "src" => PropertyId::ImageSource,                      // 0x0C
+            "src" | "image_source" => PropertyId::ImageSource,     // 0x0C
             "opacity" => PropertyId::Opacity,                      // 0x0D
             "z_index" => PropertyId::ZIndex,                       // 0x0E
-            "visibility" => PropertyId::Visibility,                // 0x0F
+            "visibility" | "visible" => PropertyId::Visibility,    // 0x0F
             "gap" => PropertyId::Gap,                              // 0x10
             "width" => PropertyId::Width,                          // 0x19
-            "height" => PropertyId::Height,                        // 0x1A
-            "layout" => PropertyId::LayoutFlags,                   // 0x1C
+            "height" => PropertyId::Height,                        // 0x1B
+            "layout" => PropertyId::LayoutFlags,                   // 0x1A
             "min_width" => PropertyId::MinWidth,                   // 0x11
             "min_height" => PropertyId::MinHeight,                 // 0x12
             "max_width" => PropertyId::MaxWidth,                   // 0x13
@@ -101,6 +102,7 @@ impl PropertyId {
             "shadow" => PropertyId::Shadow,                        // 0x17
             "overflow" => PropertyId::Overflow,                    // 0x18
             "cursor" => PropertyId::Cursor,                        // 0x29
+            "checked" => PropertyId::Checked,                      // 0x2A
             
             // App-specific properties (0x20-0x28)
             "window_width" => PropertyId::WindowWidth,             // 0x20
@@ -113,13 +115,13 @@ impl PropertyId {
             "version" => PropertyId::Version,                      // 0x27
             "author" => PropertyId::Author,                        // 0x28
             
-            _ => PropertyId::Invalid,
+            _ => PropertyId::CustomData,
         }
     }
     
     /// Check if this property should be handled in the element header instead of as a KRB property
     pub fn is_element_header_property(key: &str) -> bool {
-        matches!(key, "pos_x" | "pos_y" | "width" | "height" | "style" | "layout")
+        matches!(key, "pos_x" | "pos_y" | "width" | "height" | "style" | "layout" | "checked")
     }
 }
 
@@ -153,9 +155,9 @@ pub enum PropertyId {
     Shadow = 0x17,
     Overflow = 0x18,
     Width = 0x19,
-    Height = 0x1A,
-    CustomData = 0x1B,
-    LayoutFlags = 0x1C,
+    Height = 0x1B,
+    LayoutFlags = 0x1A,
+    CustomData = 0x1C,
     // App-specific properties
     WindowWidth = 0x20,
     WindowHeight = 0x21,
@@ -167,6 +169,7 @@ pub enum PropertyId {
     Version = 0x27,
     Author = 0x28,
     Cursor = 0x29,
+    Checked = 0x2A,
 }
 
 // Value Types
@@ -397,6 +400,7 @@ pub struct Element {
     pub height: u16,
     pub layout: u8,
     pub style_id: u8,
+    pub checked: bool,
     pub property_count: u8,
     pub child_count: u8,
     pub event_count: u8,
@@ -449,7 +453,9 @@ pub struct CompilerState {
     pub scripts: Vec<ScriptEntry>,
     pub resources: Vec<ResourceEntry>,
     pub component_defs: Vec<ComponentDefinition>,
+    pub component_ast_templates: HashMap<String, AstNode>,
     pub variables: HashMap<String, VariableDef>,
+    pub variable_context: crate::variable_context::VariableContext,
 
     pub has_app: bool,
     pub header_flags: u16,
@@ -486,7 +492,9 @@ impl CompilerState {
             scripts: Vec::new(),
             resources: Vec::new(),
             component_defs: Vec::new(),
+            component_ast_templates: HashMap::new(),
             variables: HashMap::new(),
+            variable_context: crate::variable_context::VariableContext::new(),
             has_app: false,
             header_flags: 0,
             current_line_num: 0,

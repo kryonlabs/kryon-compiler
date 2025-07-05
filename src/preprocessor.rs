@@ -1,6 +1,6 @@
 //! Preprocessor for handling @include directives and file inclusion
 
-use crate::error::{CompilerError, Result};
+use crate::error::{CompilerError, Result, SourceMap};
 use crate::types::MAX_INCLUDE_DEPTH;
 use std::collections::HashSet;
 use std::fs;
@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 pub struct Preprocessor {
     included_files: HashSet<PathBuf>,
     current_depth: usize,
+    source_map: SourceMap,
+    combined_line_count: usize,
 }
 
 impl Preprocessor {
@@ -17,12 +19,15 @@ impl Preprocessor {
         Self {
             included_files: HashSet::new(),
             current_depth: 0,
+            source_map: SourceMap::new(),
+            combined_line_count: 1,
         }
     }
 
-    /// Process @include directives recursively and return combined content
-    pub fn process_includes(&mut self, file_path: &str) -> Result<String> {
-        self.process_includes_recursive(file_path, 0)
+    /// Process @include directives recursively and return combined content with source map
+    pub fn process_includes(&mut self, file_path: &str) -> Result<(String, SourceMap)> {
+        let content = self.process_includes_recursive(file_path, 0)?;
+        Ok((content, self.source_map.clone()))
     }
 
     fn process_includes_recursive(&mut self, file_path: &str, depth: usize) -> Result<String> {
@@ -58,17 +63,18 @@ impl Preprocessor {
 
         // Process includes in this file
         let base_dir = canonical_path.parent().unwrap_or(Path::new(""));
-        let processed_content = self.process_content(&content, base_dir, depth)?;
+        let processed_content = self.process_content(&content, base_dir, file_path, depth)?;
 
         self.included_files.remove(&canonical_path);
         Ok(processed_content)
     }
 
-    fn process_content(&mut self, content: &str, base_dir: &Path, depth: usize) -> Result<String> {
+    fn process_content(&mut self, content: &str, base_dir: &Path, current_file: &str, depth: usize) -> Result<String> {
         let mut result = String::new();
         let mut line_num = 0;
+        let lines: Vec<&str> = content.lines().collect();
 
-        for line in content.lines() {
+        for line in &lines {
             line_num += 1;
             let trimmed = line.trim_start();
 
@@ -85,9 +91,23 @@ impl Preprocessor {
                 // Recursively process the included file
                 match self.process_includes_recursive(&full_include_path, depth + 1) {
                     Ok(included_content) => {
+                        // Add source mapping for each line from the included file
+                        for (i, _) in included_content.lines().enumerate() {
+                            self.source_map.add_line_mapping(
+                                self.combined_line_count + i + 1, 
+                                &full_include_path, 
+                                i + 1
+                            );
+                        }
+                        
+                        // Update combined line count for the included content
+                        let included_line_count = included_content.lines().count();
+                        self.combined_line_count += included_line_count;
+                        
                         result.push_str(&included_content);
                         if !included_content.ends_with('\n') && !included_content.is_empty() {
                             result.push('\n');
+                            self.combined_line_count += 1;
                         }
                     }
                     Err(e) => {
@@ -98,9 +118,11 @@ impl Preprocessor {
                     }
                 }
             } else {
-                // Regular line - keep as is
+                // Regular line - add to source mapping and result
+                self.source_map.add_line_mapping(self.combined_line_count, current_file, line_num);
                 result.push_str(line);
                 result.push('\n');
+                self.combined_line_count += 1;
             }
         }
 
@@ -119,6 +141,7 @@ impl Preprocessor {
         // Must start with quote
         if !after_include.starts_with('"') {
             return Err(CompilerError::Parse {
+                file: "<unknown>".to_string(),
                 line: line_num,
                 message: "Invalid @include syntax: path must be quoted".to_string(),
             });
@@ -143,6 +166,7 @@ impl Preprocessor {
         }
 
         let end_quote_pos = end_quote_pos.ok_or_else(|| CompilerError::Parse {
+            file: "<unknown>".to_string(),
             line: line_num,
             message: "Invalid @include syntax: missing closing quote".to_string(),
         })?;
@@ -155,6 +179,7 @@ impl Preprocessor {
         // Should be empty or a comment
         if !after_quote.is_empty() && !after_quote.starts_with('#') {
             return Err(CompilerError::Parse {
+                file: "<unknown>".to_string(),
                 line: line_num,
                 message: format!("Invalid @include syntax: unexpected content after path: '{}'", 
                                after_quote),
@@ -163,6 +188,7 @@ impl Preprocessor {
 
         if path.is_empty() {
             return Err(CompilerError::Parse {
+                file: "<unknown>".to_string(),
                 line: line_num,
                 message: "Invalid @include syntax: path cannot be empty".to_string(),
             });
@@ -204,9 +230,16 @@ impl Preprocessor {
 }
 
 /// Convenience function to preprocess a file with includes
-pub fn preprocess_file(file_path: &str) -> Result<String> {
+pub fn preprocess_file(file_path: &str) -> Result<(String, SourceMap)> {
     let mut preprocessor = Preprocessor::new();
     preprocessor.process_includes(file_path)
+}
+
+/// Legacy function for backward compatibility
+pub fn preprocess_file_legacy(file_path: &str) -> Result<String> {
+    let mut preprocessor = Preprocessor::new();
+    let (content, _) = preprocessor.process_includes(file_path)?;
+    Ok(content)
 }
 
 #[cfg(test)]

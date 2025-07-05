@@ -61,7 +61,7 @@ impl VariableProcessor {
 
             if line_without_comment == "@variables {" {
                 if in_variables_block {
-                    return Err(CompilerError::variable(
+                    return Err(CompilerError::variable_legacy(
                         line_num,
                         "Nested @variables blocks are not allowed"
                     ));
@@ -92,7 +92,7 @@ impl VariableProcessor {
     ) -> Result<()> {
         let parts: Vec<&str> = line.splitn(2, ':').collect();
         if parts.len() != 2 {
-            return Err(CompilerError::variable(
+            return Err(CompilerError::variable_legacy(
                 line_num,
                 format!("Invalid variable definition syntax: '{}'. Expected 'name: value'", line)
             ));
@@ -102,7 +102,7 @@ impl VariableProcessor {
         let raw_value = parts[1].trim();
 
         if !is_valid_identifier(var_name) {
-            return Err(CompilerError::variable(
+            return Err(CompilerError::variable_legacy(
                 line_num,
                 format!("Invalid variable name '{}'", var_name)
             ));
@@ -149,7 +149,7 @@ impl VariableProcessor {
     ) -> Result<String> {
         // Check if variable exists
         let var_def = state.variables.get(name).ok_or_else(|| {
-            CompilerError::variable(0, format!("Undefined variable '{}'", name))
+            CompilerError::variable_legacy(0, format!("Undefined variable '{}'", name))
         })?.clone();
 
         if var_def.is_resolved {
@@ -158,7 +158,7 @@ impl VariableProcessor {
 
         if var_def.is_resolving || visited.contains(name) {
             let cycle_path: Vec<_> = visited.iter().cloned().collect();
-            return Err(CompilerError::variable(
+            return Err(CompilerError::variable_legacy(
                 var_def.def_line,
                 format!("Circular variable dependency detected: {} -> {}", 
                        cycle_path.join(" -> "), name)
@@ -205,12 +205,15 @@ impl VariableProcessor {
     ) -> Result<String> {
         let mut result = String::new();
         let mut in_variables_block = false;
+        let mut in_component_block = false;
+        let mut component_brace_depth = 0;
         let mut line_num = 0;
         let mut substitution_errors = Vec::new();
 
         for line in source.lines() {
             line_num += 1;
             let trimmed = line.trim();
+            
 
             // Handle @variables block boundaries
             if trimmed.starts_with("@variables {") {
@@ -223,6 +226,31 @@ impl VariableProcessor {
             }
             if in_variables_block {
                 continue; // Skip lines inside @variables blocks
+            }
+            
+            // Handle component Define block boundaries
+            if trimmed.starts_with("Define ") && trimmed.contains("{") {
+                in_component_block = true;
+                component_brace_depth = 1;
+                result.push_str(line);
+                result.push('\n');
+                continue;
+            }
+            if in_component_block {
+                // Count braces to track nesting depth
+                let open_braces = line.matches('{').count();
+                let close_braces = line.matches('}').count();
+                component_brace_depth += open_braces;
+                component_brace_depth -= close_braces;
+                
+                
+                result.push_str(line);
+                result.push('\n');
+                
+                if component_brace_depth == 0 {
+                    in_component_block = false;
+                }
+                continue;
             }
 
             // First, handle expressions (like $var == 0)
@@ -269,7 +297,7 @@ impl VariableProcessor {
         }
 
         if !substitution_errors.is_empty() {
-            return Err(CompilerError::variable(0, substitution_errors.join("\n")));
+            return Err(CompilerError::variable_legacy(0, substitution_errors.join("\n")));
         }
 
         Ok(result)
@@ -280,8 +308,8 @@ impl VariableProcessor {
         // Get the variable value
         let var_value = match state.variables.get(var_name) {
             Some(var_def) if var_def.is_resolved => &var_def.value,
-            Some(_) => return Err(CompilerError::variable(0, format!("Variable '{}' not resolved", var_name))),
-            None => return Err(CompilerError::variable(0, format!("Undefined variable '{}'", var_name))),
+            Some(_) => return Err(CompilerError::variable_legacy(0, format!("Variable '{}' not resolved", var_name))),
+            None => return Err(CompilerError::variable_legacy(0, format!("Undefined variable '{}'", var_name))),
         };
 
         // Parse the comparison value
@@ -328,7 +356,7 @@ impl VariableProcessor {
                     var_value >= &comparison_value
                 }
             },
-            _ => return Err(CompilerError::variable(0, format!("Unknown operator: {}", operator))),
+            _ => return Err(CompilerError::variable_legacy(0, format!("Unknown operator: {}", operator))),
         };
 
         Ok(result.to_string())
@@ -368,6 +396,7 @@ pub fn evaluate_expression(expr: &str, variables: &HashMap<String, String>) -> R
             // Try to parse the variable value as a number
             let num_value = var_value.parse::<f64>().map_err(|_| {
                 CompilerError::Variable {
+                    file: "<unknown>".to_string(),
                     line: 0,
                     message: format!("Variable ${} is not numeric: {}", var_name, var_value),
                 }
@@ -378,6 +407,7 @@ pub fn evaluate_expression(expr: &str, variables: &HashMap<String, String>) -> R
     
     // Use meval to evaluate the expression
     meval::eval_str(&expr).map_err(|e| CompilerError::Variable {
+        file: "<unknown>".to_string(),
         line: 0,
         message: format!("Failed to evaluate expression '{}': {}", expr, e),
     })
@@ -538,7 +568,7 @@ pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
     let parts: Vec<&str> = layout_str.split_whitespace().collect();
     let mut layout_byte = 0u8;
     
-    let mut direction_set = false;
+    let mut _direction_set = false;
     
     // Set default direction to column if not specified
     if !parts.iter().any(|&p| matches!(p, "row" | "column" | "col" | "row_rev" | "col_rev")) {
@@ -550,19 +580,19 @@ pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
             // Direction
             "row" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ROW;
-                direction_set = true;
+                _direction_set = true;
             }
             "col" | "column" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COLUMN;
-                direction_set = true;
+                _direction_set = true;
             }
             "row_rev" | "row-rev" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ROW_REV;
-                direction_set = true;
+                _direction_set = true;
             }
             "col_rev" | "col-rev" | "column-rev" => {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COL_REV;
-                direction_set = true;
+                _direction_set = true;
             }
 
             // Alignment

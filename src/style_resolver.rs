@@ -2,7 +2,7 @@
 
 use crate::error::{CompilerError, Result};
 use crate::types::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 pub struct StyleResolver {
     resolution_cache: HashMap<String, Vec<KrbProperty>>,
@@ -47,7 +47,7 @@ impl StyleResolver {
             for extends_name in &style.extends_style_names {
                 // Check if the extended style exists
                 if !state.styles.iter().any(|s| s.source_name == *extends_name) {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         0,
                         format!("Style '{}' extends undefined style '{}'", style.source_name, extends_name)
                     ));
@@ -111,7 +111,7 @@ impl StyleResolver {
                 .cloned()
                 .collect();
             
-            return Err(CompilerError::semantic(
+            return Err(CompilerError::semantic_legacy(
                 0,
                 format!("Circular dependency detected in style inheritance: {:?}", unresolved)
             ));
@@ -180,7 +180,7 @@ impl StyleResolver {
             
             Ok(state.styles[base_index].properties.clone())
         } else {
-            Err(CompilerError::semantic(
+            Err(CompilerError::semantic_legacy(
                 0,
                 format!("Base style '{}' not found", base_style_name)
             ))
@@ -213,7 +213,7 @@ impl StyleResolver {
                         value: color.to_bytes().to_vec(),
                     })
                 } else {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid color value: {}", cleaned_value)
                     ));
@@ -228,7 +228,7 @@ impl StyleResolver {
                         value: vec![val],
                     })
                 } else {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid numeric value: {}", cleaned_value)
                     ));
@@ -243,7 +243,7 @@ impl StyleResolver {
                         value: val.to_le_bytes().to_vec(),
                     })
                 } else {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid font size: {}", cleaned_value)
                     ));
@@ -265,7 +265,7 @@ impl StyleResolver {
                                 701..=900 => 3u8, // heavy
                                 _ => 0u8, // default to normal
                             },
-                            Err(_) => return Err(CompilerError::semantic(
+                            Err(_) => return Err(CompilerError::semantic_legacy(
                                 source_prop.line_num,
                                 format!("Invalid font weight: {}", cleaned_value)
                             )),
@@ -286,7 +286,7 @@ impl StyleResolver {
                     "center" => 1u8,
                     "end" => 2u8,
                     "justify" => 3u8,
-                    _ => return Err(CompilerError::semantic(
+                    _ => return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid text alignment: {}", cleaned_value)
                     )),
@@ -310,13 +310,13 @@ impl StyleResolver {
                             value: fixed_point.to_le_bytes().to_vec(),
                         })
                     } else {
-                        return Err(CompilerError::semantic(
+                        return Err(CompilerError::semantic_legacy(
                             source_prop.line_num,
                             format!("Opacity must be between 0.0 and 1.0: {}", opacity)
                         ));
                     }
                 } else {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid opacity value: {}", cleaned_value)
                     ));
@@ -328,7 +328,7 @@ impl StyleResolver {
                     "true" | "visible" | "1" => true,
                     "false" | "hidden" | "0" => false,
                     _ => {
-                        return Err(CompilerError::semantic(
+                        return Err(CompilerError::semantic_legacy(
                             source_prop.line_num,
                             format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', or 'hidden'", cleaned_value)
                         ));
@@ -362,7 +362,7 @@ impl StyleResolver {
                         value: size.to_le_bytes().to_vec(),
                     })
                 } else {
-                    return Err(CompilerError::semantic(
+                    return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid size value: {}", cleaned_value)
                     ));
@@ -395,38 +395,38 @@ impl StyleResolver {
             1 => {
                 // All sides the same
                 let val = parts[0].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[0]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[0]))
                 })?;
                 [val, val, val, val]
             }
             2 => {
                 // Vertical, horizontal
                 let vertical = parts[0].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[0]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[0]))
                 })?;
                 let horizontal = parts[1].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[1]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[1]))
                 })?;
                 [vertical, horizontal, vertical, horizontal]
             }
             4 => {
                 // Top, right, bottom, left
                 let top = parts[0].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[0]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[0]))
                 })?;
                 let right = parts[1].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[1]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[1]))
                 })?;
                 let bottom = parts[2].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[2]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[2]))
                 })?;
                 let left = parts[3].parse::<u8>().map_err(|_| {
-                    CompilerError::semantic(0, format!("Invalid edge inset value: {}", parts[3]))
+                    CompilerError::semantic_legacy(0, format!("Invalid edge inset value: {}", parts[3]))
                 })?;
                 [top, right, bottom, left]
             }
             _ => {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Invalid edge inset format: '{}' (expected 1, 2, or 4 values)", value)
                 ));
@@ -437,32 +437,13 @@ impl StyleResolver {
     }
     
     fn get_property_id(&self, key: &str) -> PropertyId {
-        match key {
-            "background_color" => PropertyId::BackgroundColor,
-            "text_color" | "foreground_color" => PropertyId::ForegroundColor,
-            "border_color" => PropertyId::BorderColor,
-            "border_width" => PropertyId::BorderWidth,
-            "border_radius" => PropertyId::BorderRadius,
-            "padding" => PropertyId::Padding,
-            "margin" => PropertyId::Margin,
-            "font_size" => PropertyId::FontSize,
-            "font_weight" => PropertyId::FontWeight,
-            "text_alignment" => PropertyId::TextAlignment,
-            "opacity" => PropertyId::Opacity,
-            "z_index" => PropertyId::ZIndex,
-            "visibility" => PropertyId::Visibility,
-            "gap" => PropertyId::Gap,
-            "width" => PropertyId::Width,
-            "height" => PropertyId::Height,
-            "layout" => PropertyId::LayoutFlags,
-            _ => PropertyId::Invalid,
-        }
+        PropertyId::from_name(key)
     }
     
     fn validate_resolution_completeness(&self, state: &CompilerState) -> Result<()> {
         for style in &state.styles {
             if !style.is_resolved {
-                return Err(CompilerError::semantic(
+                return Err(CompilerError::semantic_legacy(
                     0,
                     format!("Style '{}' was not resolved", style.source_name)
                 ));

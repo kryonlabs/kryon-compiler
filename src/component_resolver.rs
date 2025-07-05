@@ -3,7 +3,8 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::types::*;
-use std::collections::{HashMap, HashSet};
+use crate::variable_context::{VariableContext, VariableScope};
+use std::collections::HashMap;
 
 pub struct ComponentResolver {
     instantiation_stack: Vec<String>, // Track instantiation to detect recursion
@@ -29,7 +30,7 @@ impl ComponentResolver {
                 for component_node in components {
                     if let AstNode::Component { name, .. } = component_node {
                         if self.instantiation_stack.contains(name) {
-                            return Err(CompilerError::component(
+                            return Err(CompilerError::component_legacy(
                                 0,
                                 format!("Recursive component definition detected: {}", name)
                             ));
@@ -82,7 +83,7 @@ impl ComponentResolver {
         if let AstNode::Element { element_type, properties, children, .. } = element {
             // Check for recursive instantiation
             if self.instantiation_stack.contains(&component_def.name) {
-                return Err(CompilerError::component(
+                return Err(CompilerError::component_legacy(
                     0,
                     format!("Recursive component instantiation: {}", component_def.name)
                 ));
@@ -93,12 +94,32 @@ impl ComponentResolver {
             // Get the component template
             let template = self.get_component_template(component_def, state)?;
             
-            // Create property mapping for template variable substitution
-            let property_mapping = self.create_property_mapping(properties, component_def)?;
+            // Push component scope and add component properties
+            state.variable_context.push_scope(VariableScope::Component);
             
-            // Clone and customize the template
+            // Add component properties to variable context
+            for prop_def in &component_def.properties {
+                state.variable_context.add_string_variable(
+                    prop_def.name.clone(),
+                    prop_def.default_value.clone(),
+                    state.current_file_path.clone(),
+                    0 // TODO: get actual line from component definition
+                )?;
+            }
+            
+            // Override with instance properties
+            for instance_prop in properties {
+                state.variable_context.add_string_variable(
+                    instance_prop.key.clone(),
+                    instance_prop.value.clone(),
+                    state.current_file_path.clone(),
+                    instance_prop.line
+                )?;
+            }
+            
+            // Clone and customize the template using the variable context
             let mut instantiated_template = template.clone();
-            self.apply_property_mapping(&mut instantiated_template, &property_mapping)?;
+            self.apply_variable_substitution(&mut instantiated_template, state)?;
             
             // Handle instance children (slot content)
             if !children.is_empty() {
@@ -111,6 +132,9 @@ impl ComponentResolver {
             // Recursively resolve any nested components
             self.resolve_element_components(element, state)?;
             
+            // Pop component scope
+            state.variable_context.pop_scope()?;
+            
             self.instantiation_stack.pop();
         }
         
@@ -118,19 +142,11 @@ impl ComponentResolver {
     }
     
     fn get_component_template(&self, component_def: &ComponentDefinition, state: &CompilerState) -> Result<AstNode> {
-        // Find the template element in the elements array
-        if let Some(root_index) = component_def.definition_root_element_index {
-            if let Some(template_element) = state.elements.get(root_index) {
-                // Convert internal Element back to AstNode for processing
-                self.convert_element_to_ast(template_element, state)
-            } else {
-                Err(CompilerError::component(
-                    0,
-                    format!("Component '{}' template element not found", component_def.name)
-                ))
-            }
+        // Look for the template in our temporary AST storage
+        if let Some(template_ast) = state.component_ast_templates.get(&component_def.name) {
+            Ok(template_ast.clone())
         } else {
-            Err(CompilerError::component(
+            Err(CompilerError::component_legacy(
                 0,
                 format!("Component '{}' has no template defined", component_def.name)
             ))
@@ -165,75 +181,23 @@ impl ComponentResolver {
         })
     }
     
-    fn create_property_mapping(
-        &self,
-        instance_properties: &[AstProperty],
-        component_def: &ComponentDefinition
-    ) -> Result<HashMap<String, String>> {
-        let mut mapping = HashMap::new();
-        
-        // Start with default values from component definition
-        for prop_def in &component_def.properties {
-            mapping.insert(prop_def.name.clone(), prop_def.default_value.clone());
-        }
-        
-        // Override with instance-provided values
-        for instance_prop in instance_properties {
-            // Check if this property is defined in the component
-            if component_def.properties.iter().any(|p| p.name == instance_prop.key) {
-                mapping.insert(instance_prop.key.clone(), instance_prop.value.clone());
-            } else {
-                // Allow unknown properties to pass through for custom behavior
-                log::warn!("Component property '{}' not defined in component schema", instance_prop.key);
-                mapping.insert(instance_prop.key.clone(), instance_prop.value.clone());
-            }
-        }
-        
-        Ok(mapping)
-    }
-    
-    fn apply_property_mapping(&self, template: &mut AstNode, mapping: &HashMap<String, String>) -> Result<()> {
+    fn apply_variable_substitution(&self, template: &mut AstNode, state: &mut CompilerState) -> Result<()> {
         match template {
             AstNode::Element { properties, children, .. } => {
-                // Replace variable references in properties
+                // Replace variable references in properties using the variable context
                 for prop in properties {
-                    prop.value = self.substitute_variables(&prop.value, mapping)?;
+                    prop.value = state.variable_context.substitute_variables(&prop.value)?;
                 }
                 
                 // Recursively process children
                 for child in children {
-                    self.apply_property_mapping(child, mapping)?;
+                    self.apply_variable_substitution(child, state)?;
                 }
             }
             _ => {}
         }
         
         Ok(())
-    }
-    
-    fn substitute_variables(&self, value: &str, mapping: &HashMap<String, String>) -> Result<String> {
-        let mut result = value.to_string();
-        
-        // Find all $variable references
-        let var_regex = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
-        
-        // Replace each variable reference
-        for captures in var_regex.captures_iter(value) {
-            if let Some(var_match) = captures.get(0) {
-                let var_name = &captures[1];
-                
-                if let Some(replacement) = mapping.get(var_name) {
-                    result = result.replace(var_match.as_str(), replacement);
-                } else {
-                    return Err(CompilerError::component(
-                        0,
-                        format!("Undefined component property variable: ${}", var_name)
-                    ));
-                }
-            }
-        }
-        
-        Ok(result)
     }
     
     fn inject_slot_content(&self, template: &mut AstNode, slot_content: &[AstNode]) -> Result<()> {
@@ -311,7 +275,7 @@ impl ComponentResolver {
             
             // Check that component has a template
             if component.definition_root_element_index.is_none() {
-                return Err(CompilerError::component(
+                return Err(CompilerError::component_legacy(
                     component.definition_start_line,
                     format!("Component '{}' has no template element defined", component.name)
                 ));
@@ -343,7 +307,7 @@ impl ComponentResolver {
                 Ok(())
             }
             _ => {
-                Err(CompilerError::component(
+                Err(CompilerError::component_legacy(
                     0,
                     format!("Invalid property type in component '{}'", component_name)
                 ))

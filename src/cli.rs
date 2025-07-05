@@ -1,7 +1,7 @@
 //! Enhanced command-line interface for the Kryon compiler
 
 use crate::error::{CompilerError, Result};
-use crate::types::*;
+// use crate::types::*;
 use crate::{compile_file_with_options, CompilerOptions, TargetPlatform};
 use clap::{Arg, ArgAction, Command, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
-use std::time::{Instant, Duration};
+use std::time::Instant;
 use notify::{RecommendedWatcher, Watcher, RecursiveMode, Event};
 use std::io::Write;
 
@@ -601,7 +601,7 @@ impl EnhancedCli {
                 (total_files - error_files) as f64 / total_files as f64 * 100.0);
         
         if error_files > 0 {
-            Err(CompilerError::semantic(0, format!("{} files have errors", error_files)))
+            Err(CompilerError::semantic_legacy(0, format!("{} files have errors", error_files)))
         } else {
             Ok(())
         }

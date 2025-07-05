@@ -43,7 +43,7 @@ impl ScriptProcessor {
         match script_node {
             AstNode::Script { language, name, source, mode } => {
                 let language_id = ScriptLanguage::from_name(language)
-                    .ok_or_else(|| CompilerError::script(0, format!("Unsupported script language: {}", language)))?;
+                    .ok_or_else(|| CompilerError::script_legacy(0, format!("Unsupported script language: {}", language)))?;
                 
                 let name_index = if let Some(n) = name {
                     state.add_string(n)?
@@ -103,7 +103,7 @@ impl ScriptProcessor {
                     source_line_num: 0, // Would be set by parser
                 })
             }
-            _ => Err(CompilerError::script(0, "Expected script node"))
+            _ => Err(CompilerError::script_legacy(0, "Expected script node"))
         }
     }
     
@@ -114,7 +114,7 @@ impl ScriptProcessor {
         };
         
         let regex = self.function_regex.get(&language)
-            .ok_or_else(|| CompilerError::script(0, format!("No function extraction pattern for {:?}", language)))?;
+            .ok_or_else(|| CompilerError::script_legacy(0, format!("No function extraction pattern for {:?}", language)))?;
         
         let mut functions = Vec::new();
         
@@ -181,13 +181,13 @@ impl ScriptProcessor {
                 }
                 
                 if paren_count < 0 || brace_count < 0 {
-                    return Err(CompilerError::script(0, "Unmatched brackets in Lua script"));
+                    return Err(CompilerError::script_legacy(0, "Unmatched brackets in Lua script"));
                 }
             }
         }
         
         if paren_count != 0 || brace_count != 0 {
-            return Err(CompilerError::script(0, "Unmatched brackets in Lua script"));
+            return Err(CompilerError::script_legacy(0, "Unmatched brackets in Lua script"));
         }
         
         Ok(())
@@ -230,13 +230,13 @@ impl ScriptProcessor {
                 }
                 
                 if paren_count < 0 || brace_count < 0 || bracket_count < 0 {
-                    return Err(CompilerError::script(0, "Unmatched brackets in JavaScript script"));
+                    return Err(CompilerError::script_legacy(0, "Unmatched brackets in JavaScript script"));
                 }
             }
         }
         
         if paren_count != 0 || brace_count != 0 || bracket_count != 0 {
-            return Err(CompilerError::script(0, "Unmatched brackets in JavaScript script"));
+            return Err(CompilerError::script_legacy(0, "Unmatched brackets in JavaScript script"));
         }
         
         Ok(())

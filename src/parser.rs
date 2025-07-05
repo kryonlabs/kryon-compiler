@@ -58,7 +58,7 @@ impl Parser {
                 }
                 TokenType::App => {
                     if app.is_some() {
-                        return Err(CompilerError::parse(
+                        return Err(CompilerError::parse_legacy(
                             self.peek().line,
                             "Multiple App elements found. Only one App element is allowed."
                         ));
@@ -69,14 +69,14 @@ impl Parser {
                     // Try parsing as element (for component usage at root level)
                     if self.is_element_start() {
                         if app.is_some() {
-                            return Err(CompilerError::parse(
+                            return Err(CompilerError::parse_legacy(
                                 self.peek().line,
                                 "Only one root element (App or component) is allowed."
                             ));
                         }
                         app = Some(Box::new(self.parse_element()?));
                     } else {
-                        return Err(CompilerError::parse(
+                        return Err(CompilerError::parse_legacy(
                             self.peek().line,
                             format!("Unexpected token: {}", self.peek().token_type)
                         ));
@@ -99,7 +99,7 @@ impl Parser {
         
         let path = match &self.advance().token_type {
             TokenType::String(s) => s.clone(),
-            _ => return Err(CompilerError::parse(
+            _ => return Err(CompilerError::parse_legacy(
                 self.previous().line,
                 "Expected string path after @include"
             )),
@@ -124,7 +124,7 @@ impl Parser {
             }
             let name = match &self.advance().token_type {
                 TokenType::Identifier(name) => name.clone(),
-                _ => return Err(CompilerError::parse(
+                _ => return Err(CompilerError::parse_legacy(
                     self.previous().line,
                     "Expected variable name"
                 )),
@@ -146,7 +146,7 @@ impl Parser {
         
         let language = match &self.advance().token_type {
             TokenType::String(lang) => lang.clone(),
-            _ => return Err(CompilerError::parse(
+            _ => return Err(CompilerError::parse_legacy(
                 self.previous().line,
                 "Expected language string after @script"
             )),
@@ -306,7 +306,7 @@ impl Parser {
         
         let language = match &self.advance().token_type {
             TokenType::String(lang) => lang.clone(),
-            _ => return Err(CompilerError::parse(
+            _ => return Err(CompilerError::parse_legacy(
                 self.previous().line,
                 "Expected language string after @function"
             )),
@@ -315,7 +315,7 @@ impl Parser {
         // Parse function name and parameters
         let function_name = match &self.advance().token_type {
             TokenType::Identifier(name) => name.clone(),
-            _ => return Err(CompilerError::parse(
+            _ => return Err(CompilerError::parse_legacy(
                 self.previous().line,
                 "Expected function name"
             )),
@@ -332,7 +332,7 @@ impl Parser {
                     continue;
                 }
             } else {
-                return Err(CompilerError::parse(
+                return Err(CompilerError::parse_legacy(
                     self.previous().line,
                     "Expected parameter name"
                 ));
@@ -365,7 +365,7 @@ impl Parser {
         let name = if let TokenType::String(name) = &self.peek().token_type {
             name.clone()
         } else {
-            return Err(CompilerError::parse(
+            return Err(CompilerError::parse_legacy(
                 self.peek().line,
                 format!("Expected style name string, but found {}", self.peek().token_type)
             ));
@@ -376,6 +376,7 @@ impl Parser {
         
         let mut extends = Vec::new();
         let mut properties = Vec::new();
+        let mut pseudo_selectors = Vec::new();
         
         while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
             if self.match_token(&TokenType::Newline) {
@@ -386,13 +387,18 @@ impl Parser {
                 continue;
             }
             
-            let prop = self.parse_property()?;
-            
-            // Handle extends specially
-            if prop.key == "extends" {
-                extends = self.parse_extends_value(&prop.value)?;
+            // Check for pseudo-selectors
+            if matches!(self.peek().token_type, TokenType::PseudoSelector(_)) {
+                pseudo_selectors.push(self.parse_pseudo_selector()?);
             } else {
-                properties.push(prop);
+                let prop = self.parse_property()?;
+                
+                // Handle extends specially
+                if prop.key == "extends" {
+                    extends = self.parse_extends_value(&prop.value)?;
+                } else {
+                    properties.push(prop);
+                }
             }
         }
         
@@ -402,6 +408,7 @@ impl Parser {
             name,
             extends,
             properties,
+            pseudo_selectors,
         })
     }
     
@@ -438,7 +445,7 @@ impl Parser {
         let name = if let TokenType::Identifier(name) = &self.peek().token_type {
             name.clone()
         } else {
-            return Err(CompilerError::parse(
+            return Err(CompilerError::parse_legacy(
                 self.peek().line,
                 "Expected component name after 'Define'"
             ));
@@ -464,14 +471,14 @@ impl Parser {
                 properties = self.parse_component_properties()?;
             } else if self.is_element_start() {
                 if template.is_some() {
-                    return Err(CompilerError::parse(
+                    return Err(CompilerError::parse_legacy(
                         self.peek().line,
                         "Component can only have one root template element"
                     ));
                 }
                 template = Some(Box::new(self.parse_element()?));
             } else {
-                return Err(CompilerError::parse(
+                return Err(CompilerError::parse_legacy(
                     self.peek().line,
                     "Expected 'Properties' block or template element in component"
                 ));
@@ -480,7 +487,7 @@ impl Parser {
         
         self.consume(TokenType::RightBrace, "Expected '}' after component definition")?;
         
-        let template = template.ok_or_else(|| CompilerError::parse(
+        let template = template.ok_or_else(|| CompilerError::parse_legacy(
             self.previous().line,
             "Component must have a template element"
         ))?;
@@ -508,7 +515,7 @@ impl Parser {
             
             let name = match &self.advance().token_type {
                 TokenType::Identifier(name) => name.clone(),
-                _ => return Err(CompilerError::parse(
+                _ => return Err(CompilerError::parse_legacy(
                     self.previous().line,
                     "Expected property name"
                 )),
@@ -518,7 +525,7 @@ impl Parser {
             
             let property_type = match &self.advance().token_type {
                 TokenType::Identifier(type_name) => type_name.clone(),
-                _ => return Err(CompilerError::parse(
+                _ => return Err(CompilerError::parse_legacy(
                     self.previous().line,
                     "Expected property type"
                 )),
@@ -551,7 +558,7 @@ impl Parser {
             TokenType::Button => "Button".to_string(),
             TokenType::Input => "Input".to_string(),
             TokenType::Identifier(name) => name.clone(),
-            _ => return Err(CompilerError::parse(
+            _ => return Err(CompilerError::parse_legacy(
                 self.peek().line,
                 "Expected element type"
             )),
@@ -572,14 +579,14 @@ impl Parser {
                     continue;
                 }
 
-                if self.match_token(&TokenType::PseudoSelector) {
+                if matches!(self.peek().token_type, TokenType::PseudoSelector(_)) {
                     pseudo_selectors.push(self.parse_pseudo_selector()?);
                 } else if self.is_property() {
                     properties.push(self.parse_property()?);
                 } else if self.is_element_start() {
                     children.push(self.parse_element()?);
                 } else {
-                    return Err(CompilerError::parse(
+                    return Err(CompilerError::parse_legacy(
                         self.peek().line,
                         format!("Unexpected token in element body: {}", self.peek().token_type)
                     ));
@@ -598,8 +605,14 @@ impl Parser {
     }
     
     fn parse_pseudo_selector(&mut self) -> Result<PseudoSelector> {
-        // Parse &:state syntax
-        let state = "hover".to_string(); // Simplified - would need to parse actual state
+        // Extract the state from the pseudo-selector token
+        let state = match &self.advance().token_type {
+            TokenType::PseudoSelector(state) => state.clone(),
+            _ => return Err(CompilerError::parse_legacy(
+                self.previous().line,
+                "Expected pseudo-selector"
+            )),
+        };
         
         self.consume(TokenType::LeftBrace, "Expected '{' after pseudo-selector")?;
         
@@ -628,7 +641,7 @@ impl Parser {
             TokenType::Container => "container".to_string(),
             TokenType::App => "app".to_string(),
             _ => {
-                return Err(CompilerError::parse(
+                return Err(CompilerError::parse_legacy(
                     self.peek().line,
                     format!("Expected property name, but found token: {}", self.peek().token_type)
                 ));
@@ -704,7 +717,7 @@ impl Parser {
                     expression_parts.push(name.clone());
                     self.advance();
                 } else {
-                    return Err(CompilerError::parse(
+                    return Err(CompilerError::parse_legacy(
                         self.peek().line,
                         "Expected variable name after '$'"
                     ));
@@ -752,7 +765,7 @@ impl Parser {
                 
                 Ok(expression_parts.join(" "))
             }
-            _ => Err(CompilerError::parse(
+            _ => Err(CompilerError::parse_legacy(
                 self.peek().line,
                 format!("Expected a value, but found {}", self.peek().token_type)
             )),
@@ -850,7 +863,7 @@ impl Parser {
         if self.check(&token_type) {
             Ok(self.advance())
         } else {
-            Err(CompilerError::parse(
+            Err(CompilerError::parse_legacy(
                 self.peek().line,
                 format!("{}, got {}", message, self.peek().token_type)
             ))

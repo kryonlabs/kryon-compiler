@@ -1,6 +1,6 @@
 //! KRB binary code generation
 
-use crate::ast::*;
+// use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::types::*;
 use byteorder::{LittleEndian, WriteBytesExt};
@@ -180,11 +180,11 @@ impl CodeGenerator {
         self.element_offsets.insert(element_index, self.output.len() as u32);
         
         // Debug output to track what's being written
-        println!("Writing element {}: type={:?} ({}), pos=({}, {}), size=({}, {})", 
+        println!("Writing element {}: type={:?} ({}), pos=({}, {}), size=({}, {}), id_string_index={}", 
                 element_index, element.element_type, element.element_type as u8,
-                element.pos_x, element.pos_y, element.width, element.height);
+                element.pos_x, element.pos_y, element.width, element.height, element.id_string_index);
         
-        // Element header (18 bytes)
+        // Element header (19 bytes)
         self.output.push(element.element_type as u8);
         self.output.push(element.id_string_index);
         self.output.write_u16::<LittleEndian>(element.pos_x)?;
@@ -193,6 +193,7 @@ impl CodeGenerator {
         self.output.write_u16::<LittleEndian>(element.height)?;
         self.output.push(element.layout);
         self.output.push(element.style_id);
+        self.output.push(if element.checked { 1 } else { 0 });
         self.output.push(element.property_count);
         self.output.push(element.child_count);
         self.output.push(element.event_count);

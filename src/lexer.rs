@@ -48,7 +48,7 @@ pub enum TokenType {
     Dot,          // .
     
     // Pseudo-selector
-    PseudoSelector, // &:hover, &:active, etc.
+    PseudoSelector(String), // &:hover, &:active, etc.
     
     // Literals
     String(String),
@@ -111,7 +111,7 @@ impl fmt::Display for TokenType {
             TokenType::Ampersand => write!(f, "&"),
             TokenType::Dollar => write!(f, "$"),
             TokenType::Dot => write!(f, "."),
-            TokenType::PseudoSelector => write!(f, "pseudo-selector"),
+            TokenType::PseudoSelector(state) => write!(f, "pseudo-selector({})", state),
             TokenType::String(s) => write!(f, "string(\"{}\")", s),
             TokenType::Number(n) => write!(f, "number({})", n),
             TokenType::Integer(i) => write!(f, "integer({})", i),
@@ -140,6 +140,9 @@ pub struct Lexer {
     color_regex: Regex,
     identifier_regex: Regex,
     pseudo_selector_regex: Regex,
+    
+    // Source mapping for better error reporting
+    source_map: Option<crate::error::SourceMap>,
 }
 
 impl Lexer {
@@ -154,18 +157,57 @@ impl Lexer {
             color_regex: Regex::new(r"^#[0-9A-Fa-f]{3,8}$").unwrap(),
             identifier_regex: Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap(),
             pseudo_selector_regex: Regex::new(r"^&:(hover|active|focus|disabled|checked)$").unwrap(),
+            source_map: None,
         }
+    }
+
+    pub fn new_with_source_map(input: &str, filename: String, source_map: crate::error::SourceMap) -> Self {
+        Self {
+            input: input.chars().collect(),
+            position: 0,
+            line: 1,
+            column: 1,
+            filename,
+            source: input.to_string(),
+            color_regex: Regex::new(r"^#[0-9A-Fa-f]{3,8}$").unwrap(),
+            identifier_regex: Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap(),
+            pseudo_selector_regex: Regex::new(r"^&:(hover|active|focus|disabled|checked)$").unwrap(),
+            source_map: Some(source_map),
+        }
+    }
+
+    /// Get the original source location for error reporting
+    fn get_source_location(&self) -> (String, usize) {
+        if let Some(ref source_map) = self.source_map {
+            source_map.resolve_location(self.line, &self.filename)
+        } else {
+            (self.filename.clone(), self.line)
+        }
+    }
+
+    /// Create a parse error with proper source location
+    fn parse_error(&self, message: impl Into<String>) -> CompilerError {
+        let (file, line) = self.get_source_location();
+        log::debug!("Parse error at combined line {}, mapped to {}:{}", self.line, file, line);
+        CompilerError::parse(file, line, message)
     }
     
     pub fn tokenize(&mut self) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
         let mut pending_script_function = false;
+        let mut pending_script_block = false;
         
         while !self.is_at_end() {
             if let Some(token) = self.next_token()? {
-                // Check if we just encountered @function
+                // Check if we just encountered @function or @script
                 if matches!(token.token_type, TokenType::Function) {
                     pending_script_function = true;
+                    tokens.push(token);
+                    continue;
+                }
+                
+                if matches!(token.token_type, TokenType::Script) {
+                    pending_script_block = true;
                     tokens.push(token);
                     continue;
                 }
@@ -184,15 +226,49 @@ impl Lexer {
                         filename: self.filename.clone(),
                     });
                     
-                    // The closing brace is consumed by read_script_content, no need to add it again
-                    // (The next token from next_token() will be whatever comes after the function)
+                    // Add the closing brace token
+                    tokens.push(Token {
+                        token_type: TokenType::RightBrace,
+                        line: self.line,
+                        column: self.column,
+                        filename: self.filename.clone(),
+                    });
                     
                     continue;
                 }
                 
-                // Reset pending flag if we hit anything else that indicates we're not in a function signature
+                // If we're pending a script block and hit opening brace, switch to script mode
+                if pending_script_block && matches!(token.token_type, TokenType::LeftBrace) {
+                    pending_script_block = false;
+                    tokens.push(token); // Add the opening brace
+                    
+                    // Now read script content as raw text
+                    let script_content = self.read_script_content()?;
+                    tokens.push(Token {
+                        token_type: TokenType::ScriptContent(script_content),
+                        line: self.line,
+                        column: self.column,
+                        filename: self.filename.clone(),
+                    });
+                    
+                    // Add the closing brace token
+                    tokens.push(Token {
+                        token_type: TokenType::RightBrace,
+                        line: self.line,
+                        column: self.column,
+                        filename: self.filename.clone(),
+                    });
+                    
+                    continue;
+                }
+                
+                // Reset pending flags if we hit anything else that indicates we're not in a script signature
                 if pending_script_function && !matches!(token.token_type, TokenType::String(_) | TokenType::Identifier(_) | TokenType::LeftParen | TokenType::RightParen | TokenType::Comma | TokenType::Newline) {
                     pending_script_function = false;
+                }
+                
+                if pending_script_block && !matches!(token.token_type, TokenType::String(_) | TokenType::Newline) {
+                    pending_script_block = false;
                 }
                 
                 tokens.push(token);
@@ -251,7 +327,7 @@ impl Lexer {
                     // This is a decimal number starting with .
                     let number_str = self.read_number(ch)?;
                     TokenType::Number(number_str.parse().map_err(|_| {
-                        CompilerError::parse(self.line, format!("Invalid number: {}", number_str))
+                        self.parse_error(format!("Invalid number: {}", number_str))
                     })?)
                 } else {
                     TokenType::Dot
@@ -262,10 +338,11 @@ impl Lexer {
                     // Handle pseudo-selectors like &:hover
                     let pseudo = self.read_pseudo_selector()?;
                     if self.pseudo_selector_regex.is_match(&pseudo) {
-                        TokenType::PseudoSelector
+                        // Extract the state part (everything after &:)
+                        let state = pseudo.strip_prefix("&:").unwrap_or("").to_string();
+                        TokenType::PseudoSelector(state)
                     } else {
-                        return Err(CompilerError::parse(
-                            self.line,
+                        return Err(self.parse_error(
                             format!("Invalid pseudo-selector: {}", pseudo)
                         ));
                     }
@@ -291,8 +368,7 @@ impl Lexer {
                     let comment = self.read_comment();
                     TokenType::Comment(comment)
                 } else {
-                    return Err(CompilerError::parse(
-                        self.line,
+                    return Err(self.parse_error(
                         format!("Unexpected character: '{}' (single slash not supported)", ch)
                     ));
                 }
@@ -314,8 +390,7 @@ impl Lexer {
                         // For @function, we need to read the script content specially
                         TokenType::Function
                     },
-                    _ => return Err(CompilerError::parse(
-                        self.line,
+                    _ => return Err(self.parse_error(
                         format!("Unknown directive: {}", directive)
                     )),
                 }
@@ -324,11 +399,11 @@ impl Lexer {
                 let number_str = self.read_number(ch)?;
                 if number_str.contains('.') {
                     TokenType::Number(number_str.parse().map_err(|_| {
-                        CompilerError::parse(self.line, format!("Invalid number: {}", number_str))
+                        self.parse_error(format!("Invalid number: {}", number_str))
                     })?)
                 } else {
                     TokenType::Integer(number_str.parse().map_err(|_| {
-                        CompilerError::parse(self.line, format!("Invalid integer: {}", number_str))
+                        self.parse_error(format!("Invalid integer: {}", number_str))
                     })?)
                 }
             }
@@ -341,8 +416,7 @@ impl Lexer {
                 self.identify_keyword_or_identifier(identifier)
             }
             _ => {
-                return Err(CompilerError::parse(
-                    self.line,
+                return Err(self.parse_error(
                     format!("Unexpected character: '{}'", ch)
                 ));
             }
@@ -430,8 +504,7 @@ impl Lexer {
                 self.advance(); // consume closing quote
                 return Ok(value);
             } else if ch == '\n' || ch == '\r' {
-                return Err(CompilerError::parse(
-                    self.line,
+                return Err(self.parse_error(
                     "Unterminated string literal"
                 ));
             } else {
@@ -440,8 +513,7 @@ impl Lexer {
             }
         }
         
-        Err(CompilerError::parse(
-            self.line,
+        Err(self.parse_error(
             "Unterminated string literal"
         ))
     }
@@ -460,8 +532,7 @@ impl Lexer {
         
         // Validate color format
         if !self.color_regex.is_match(&color) {
-            return Err(CompilerError::parse(
-                self.line,
+            return Err(self.parse_error(
                 format!("Invalid color format: {}", color)
             ));
         }
@@ -470,8 +541,7 @@ impl Lexer {
         let hex_part = &color[1..];
         match hex_part.len() {
             3 | 4 | 6 | 8 => Ok(color),
-            _ => Err(CompilerError::parse(
-                self.line,
+            _ => Err(self.parse_error(
                 format!("Invalid color format: {} (expected 3, 4, 6, or 8 hex digits)", color)
             )),
         }
@@ -542,8 +612,7 @@ impl Lexer {
                 
                 // Must have digit after decimal point
                 if !self.peek().map_or(false, |c| c.is_ascii_digit()) {
-                    return Err(CompilerError::parse(
-                        self.line,
+                    return Err(self.parse_error(
                         format!("Invalid number format: {}", number)
                     ));
                 }
@@ -606,23 +675,55 @@ impl Lexer {
     
     // Public method that can be called by the parser to read script content
     pub fn read_script_content(&mut self) -> Result<String> {
-        let mut content = String::new();
-        let mut brace_count = 1; // Assume we've already consumed the opening brace
+        let start_line = self.line;
+        log::debug!("Starting to read script content at line {}", start_line);
         
-        // Read everything until we find the matching closing brace
+        let mut content = String::new();
+        let mut depth = 0; // Track nesting depth for proper closing brace detection
+        let mut in_string = false;
+        let mut string_char = '"'; // Track which quote character started the string
+        let mut escaped = false;
+        
+        // Read everything until we find the script block closing brace
         while let Some(ch) = self.peek() {
-            if ch == '{' {
-                brace_count += 1;
+            if escaped {
+                // If we're in an escape sequence, just add both characters
+                content.push(ch);
+                escaped = false;
+                self.advance();
+            } else if ch == '\\' && in_string {
+                // Starting an escape sequence within a string
+                content.push(ch);
+                escaped = true;
+                self.advance();
+            } else if (ch == '"' || ch == '\'') && !in_string {
+                // Starting a string literal
+                log::debug!("Starting string literal with '{}' at line {}", ch, self.line);
+                in_string = true;
+                string_char = ch;
                 content.push(ch);
                 self.advance();
-            } else if ch == '}' {
-                brace_count -= 1;
-                if brace_count == 0 {
-                    // DON'T consume the closing brace - let the tokenizer handle it normally
-                    break;
-                } else {
+            } else if ch == string_char && in_string {
+                // Ending a string literal
+                log::debug!("Ending string literal with '{}' at line {}", ch, self.line);
+                in_string = false;
+                content.push(ch);
+                self.advance();
+            } else if !in_string && ch == '{' {
+                // This is a nested opening brace within the script content
+                depth += 1;
+                content.push(ch);
+                self.advance();
+            } else if !in_string && ch == '}' {
+                if depth > 0 {
+                    // This is a nested closing brace within the script content
+                    depth -= 1;
                     content.push(ch);
                     self.advance();
+                } else {
+                    // This is the script block closing brace
+                    self.advance();
+                    break;
                 }
             } else {
                 content.push(ch);
@@ -633,13 +734,18 @@ impl Lexer {
             }
         }
         
-        if brace_count > 0 {
-            return Err(CompilerError::parse(
-                self.line,
-                "Unclosed script block - missing '}'"
-            ));
+        if depth > 0 {
+            log::debug!("Script content parsing failed: depth = {} at line {}", depth, self.line);
+            log::debug!("Content so far: {}", content);
+            return Err(self.parse_error("Unclosed script block - missing '}'"));
         }
         
+        if in_string {
+            log::debug!("Script content parsing failed: unclosed string at line {}", self.line);
+            return Err(self.parse_error("Unclosed string literal in script block"));
+        }
+        
+        log::debug!("Successfully read script content: {} characters", content.len());
         Ok(content)
     }
 }
@@ -731,9 +837,18 @@ mod tests {
         let mut lexer = Lexer::new("&:hover &:active &:focus", "test.kry".to_string());
         let tokens = lexer.tokenize().unwrap();
         
-        assert_eq!(tokens[0].token_type, TokenType::PseudoSelector);
-        assert_eq!(tokens[1].token_type, TokenType::PseudoSelector);
-        assert_eq!(tokens[2].token_type, TokenType::PseudoSelector);
+        match &tokens[0].token_type {
+            TokenType::PseudoSelector(state) => assert_eq!(state, "hover"),
+            _ => panic!("Expected PseudoSelector"),
+        }
+        match &tokens[1].token_type {
+            TokenType::PseudoSelector(state) => assert_eq!(state, "active"),
+            _ => panic!("Expected PseudoSelector"),
+        }
+        match &tokens[2].token_type {
+            TokenType::PseudoSelector(state) => assert_eq!(state, "focus"),
+            _ => panic!("Expected PseudoSelector"),
+        }
     }
     
     #[test]
