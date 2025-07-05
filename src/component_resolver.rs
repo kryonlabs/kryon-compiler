@@ -99,9 +99,16 @@ impl ComponentResolver {
             
             // Add component properties to variable context
             for prop_def in &component_def.properties {
+                // Strip quotes from default values for variable substitution
+                let clean_default = if prop_def.default_value.starts_with('"') && prop_def.default_value.ends_with('"') {
+                    prop_def.default_value[1..prop_def.default_value.len()-1].to_string()
+                } else {
+                    prop_def.default_value.clone()
+                };
+                
                 state.variable_context.add_string_variable(
                     prop_def.name.clone(),
-                    prop_def.default_value.clone(),
+                    clean_default,
                     state.current_file_path.clone(),
                     0 // TODO: get actual line from component definition
                 )?;
@@ -109,9 +116,16 @@ impl ComponentResolver {
             
             // Override with instance properties
             for instance_prop in properties {
+                // Strip quotes from string values for variable substitution
+                let clean_value = if instance_prop.value.starts_with('"') && instance_prop.value.ends_with('"') {
+                    instance_prop.value[1..instance_prop.value.len()-1].to_string()
+                } else {
+                    instance_prop.value.clone()
+                };
+                
                 state.variable_context.add_string_variable(
                     instance_prop.key.clone(),
-                    instance_prop.value.clone(),
+                    clean_value,
                     state.current_file_path.clone(),
                     instance_prop.line
                 )?;
