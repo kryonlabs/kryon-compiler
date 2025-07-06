@@ -398,6 +398,18 @@ pub fn compile_source_with_options(
         log::debug!("Phase 1.2 complete. Semantic analysis passed");
     }
     
+    // Phase 1.25: Style resolution
+    if options.debug_mode {
+        log::debug!("Phase 1.25: Resolving style inheritance...");
+    }
+    
+    let mut style_resolver = StyleResolver::new();
+    style_resolver.resolve_all_styles(&mut state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.25 complete. Style inheritance resolved");
+    }
+    
     // Phase 1.3: Process scripts
     if options.debug_mode {
         log::debug!("Phase 1.3: Processing scripts...");
@@ -425,6 +437,17 @@ pub fn compile_source_with_options(
     }
     
     convert_ast_to_state(&ast, &mut state)?;
+    
+    // Phase 1.45: Apply style properties to elements
+    if options.debug_mode {
+        log::debug!("Phase 1.45: Applying style properties to elements...");
+    }
+    
+    apply_style_properties_to_elements(&mut state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.45 complete. Style properties applied to elements");
+    }
     
     stats.element_count = state.elements.len();
     stats.style_count = state.styles.len();
@@ -1099,6 +1122,44 @@ pub fn supports_feature(feature: &str) -> bool {
 /// Get compiler build information
 pub fn build_info() -> &'static CompilerInfo {
     &BUILD_INFO
+}
+
+/// Apply style properties (width, height, layout) to element headers
+/// This bridges the gap between style definitions and element size calculations
+fn apply_style_properties_to_elements(state: &mut CompilerState) -> Result<()> {
+    for element in &mut state.elements {
+        // Element.style_id is u8, not Option<u8>
+        if element.style_id > 0 {
+            // Find the style by ID
+            if let Some(style) = state.styles.iter().find(|s| s.id == element.style_id) {
+                // Apply width, height, and layout properties if found in style
+                for property in &style.properties {
+                    // Convert property_id back to PropertyId using manual matching
+                    match property.property_id {
+                        0x19 => { // PropertyId::Width
+                            if property.value_type == ValueType::Short && property.value.len() >= 2 {
+                                let width = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                element.width = width;
+                            }
+                        },
+                        0x1B => { // PropertyId::Height  
+                            if property.value_type == ValueType::Short && property.value.len() >= 2 {
+                                let height = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                element.height = height;
+                            }
+                        },
+                        0x1A => { // PropertyId::LayoutFlags
+                            if property.value_type == ValueType::Byte && !property.value.is_empty() {
+                                element.layout = property.value[0];
+                            }
+                        },
+                        _ => {} // Ignore other properties for now
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
