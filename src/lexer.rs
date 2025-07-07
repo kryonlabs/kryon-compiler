@@ -700,41 +700,16 @@ impl Lexer {
         
         let mut content = String::new();
         let mut depth = 0; // Track nesting depth for proper closing brace detection
-        let mut in_string = false;
-        let mut string_char = '"'; // Track which quote character started the string
-        let mut escaped = false;
         
         // Read everything until we find the script block closing brace
+        // We treat the content as raw text and only track braces for nesting
         while let Some(ch) = self.peek() {
-            if escaped {
-                // If we're in an escape sequence, just add both characters
-                content.push(ch);
-                escaped = false;
-                self.advance();
-            } else if ch == '\\' && in_string {
-                // Starting an escape sequence within a string
-                content.push(ch);
-                escaped = true;
-                self.advance();
-            } else if (ch == '"' || ch == '\'') && !in_string {
-                // Starting a string literal
-                log::debug!("Starting string literal with '{}' at line {}", ch, self.line);
-                in_string = true;
-                string_char = ch;
-                content.push(ch);
-                self.advance();
-            } else if ch == string_char && in_string {
-                // Ending a string literal
-                log::debug!("Ending string literal with '{}' at line {}", ch, self.line);
-                in_string = false;
-                content.push(ch);
-                self.advance();
-            } else if !in_string && ch == '{' {
+            if ch == '{' {
                 // This is a nested opening brace within the script content
                 depth += 1;
                 content.push(ch);
                 self.advance();
-            } else if !in_string && ch == '}' {
+            } else if ch == '}' {
                 if depth > 0 {
                     // This is a nested closing brace within the script content
                     depth -= 1;
@@ -758,11 +733,6 @@ impl Lexer {
             log::debug!("Script content parsing failed: depth = {} at line {}", depth, self.line);
             log::debug!("Content so far: {}", content);
             return Err(self.parse_error("Unclosed script block - missing '}'"));
-        }
-        
-        if in_string {
-            log::debug!("Script content parsing failed: unclosed string at line {}", self.line);
-            return Err(self.parse_error("Unclosed string literal in script block"));
         }
         
         log::debug!("Successfully read script content: {} characters", content.len());
