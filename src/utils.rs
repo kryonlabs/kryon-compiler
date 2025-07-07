@@ -571,7 +571,7 @@ pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
     let mut _direction_set = false;
     
     // Set default direction to column if not specified
-    if !parts.iter().any(|&p| matches!(p, "row" | "column" | "col" | "row_rev" | "col_rev")) {
+    if !parts.iter().any(|&p| matches!(p, "row" | "column" | "col" | "absolute")) {
         layout_byte |= LAYOUT_DIRECTION_COLUMN;
     }
 
@@ -586,14 +586,7 @@ pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
                 layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COLUMN;
                 _direction_set = true;
             }
-            "row_rev" | "row-rev" => {
-                layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ROW_REV;
-                _direction_set = true;
-            }
-            "col_rev" | "col-rev" | "column-rev" => {
-                layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COL_REV;
-                _direction_set = true;
-            }
+            // Note: row_rev and col_rev are not supported by the renderer
 
             // Alignment
             "start" => {
@@ -609,10 +602,15 @@ pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
                 layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_SPACE_BETWEEN;
             }
 
+            // Special layout type
+            "absolute" => {
+                layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ABSOLUTE;
+                _direction_set = true;
+            }
+
             // Flags
             "wrap" => layout_byte |= LAYOUT_WRAP_BIT,
             "grow" => layout_byte |= LAYOUT_GROW_BIT,
-            "absolute" => layout_byte |= LAYOUT_ABSOLUTE_BIT,
 
             // Ignore unknown parts
             _ => {
@@ -772,7 +770,7 @@ pub fn split_properties_by_semicolon(props_str: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{LAYOUT_DIRECTION_ROW, LAYOUT_ALIGNMENT_CENTER, LAYOUT_DIRECTION_COLUMN, LAYOUT_ALIGNMENT_START, LAYOUT_GROW_BIT};
+    use crate::types::{LAYOUT_DIRECTION_ROW, LAYOUT_ALIGNMENT_CENTER, LAYOUT_DIRECTION_COLUMN, LAYOUT_ALIGNMENT_START, LAYOUT_GROW_BIT, LAYOUT_DIRECTION_ABSOLUTE};
     
     #[test]
     fn test_clean_and_quote_value() {
@@ -814,6 +812,10 @@ mod tests {
                    LAYOUT_DIRECTION_ROW | LAYOUT_ALIGNMENT_CENTER);
         assert_eq!(parse_layout_string("column start grow").unwrap(), 
                    LAYOUT_DIRECTION_COLUMN | LAYOUT_ALIGNMENT_START | LAYOUT_GROW_BIT);
+        assert_eq!(parse_layout_string("absolute").unwrap(), 
+                   LAYOUT_DIRECTION_ABSOLUTE);
+        assert_eq!(parse_layout_string("absolute center").unwrap(), 
+                   LAYOUT_DIRECTION_ABSOLUTE | LAYOUT_ALIGNMENT_CENTER);
     }
     
     #[test]

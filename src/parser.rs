@@ -24,6 +24,7 @@ impl Parser {
         let mut components = Vec::new();
         let mut scripts = Vec::new();
         let mut app = None;
+        let mut standalone_elements = Vec::new(); // Collect standalone elements for auto-wrapping
         
         while !self.is_at_end() {
             // Skip newlines
@@ -66,7 +67,7 @@ impl Parser {
                     app = Some(Box::new(self.parse_element()?));
                 }
                 _ => {
-                    // Try parsing as element (for component usage at root level)
+                    // Try parsing as element (for component usage at root level or standalone elements)
                     if self.is_element_start() {
                         if app.is_some() {
                             return Err(CompilerError::parse_legacy(
@@ -74,7 +75,19 @@ impl Parser {
                                 "Only one root element (App or component) is allowed."
                             ));
                         }
-                        app = Some(Box::new(self.parse_element()?));
+                        
+                        let element = self.parse_element()?;
+                        // Check if this is a standalone element that needs App wrapping
+                        if let AstNode::Element { element_type, .. } = &element {
+                            if element_type == "App" {
+                                app = Some(Box::new(element));
+                            } else {
+                                // This is a standalone element - collect it for auto-wrapping
+                                standalone_elements.push(element);
+                            }
+                        } else {
+                            app = Some(Box::new(element));
+                        }
                     } else {
                         return Err(CompilerError::parse_legacy(
                             self.peek().line,
@@ -84,6 +97,13 @@ impl Parser {
                 }
             }
         }
+        
+        // Auto-create App wrapper if none exists and we have standalone elements at root level
+        let app = if app.is_none() && !standalone_elements.is_empty() {
+            self.create_default_app_wrapper(standalone_elements)?
+        } else {
+            app
+        };
         
         Ok(AstNode::File {
             directives,
@@ -676,6 +696,11 @@ impl Parser {
                 self.advance();
                 Ok(value)
             }
+            TokenType::Percentage(p) => {
+                let value = format!("{}%", p);
+                self.advance();
+                Ok(value)
+            }
             TokenType::Boolean(b) => {
                 let value = b.to_string();
                 self.advance();
@@ -869,6 +894,29 @@ impl Parser {
             ))
         }
     }
+    
+    /// Create a default App wrapper when no App element is present in the KRY file
+    /// This matches the behavior of the renderer which creates an App wrapper automatically
+    fn create_default_app_wrapper(&mut self, standalone_elements: Vec<AstNode>) -> Result<Option<Box<AstNode>>> {
+        if standalone_elements.is_empty() {
+            return Ok(None);
+        }
+        
+        let element_count = standalone_elements.len();
+        let default_app = AstNode::Element {
+            element_type: "App".to_string(),
+            properties: vec![
+                AstProperty::new("window_title".to_string(), "\"Auto-generated App\"".to_string(), 1),
+                AstProperty::new("window_width".to_string(), "800".to_string(), 1),
+                AstProperty::new("window_height".to_string(), "600".to_string(), 1),
+            ],
+            pseudo_selectors: Vec::new(),
+            children: standalone_elements, // Wrap all standalone elements as children
+        };
+        
+        log::info!("Auto-created App wrapper for {} standalone elements", element_count);
+        Ok(Some(Box::new(default_app)))
+    }
 }
 
 #[cfg(test)]
@@ -905,6 +953,111 @@ mod tests {
         }
     }
     
+    #[test]
+    fn test_auto_app_wrapper_creation() {
+        // Test that standalone elements are automatically wrapped in an App
+        let source = r#"
+            Text {
+                text: "Hello World"
+                font_size: 18
+            }
+            
+            Container {
+                layout: "column"
+                
+                Button {
+                    text: "Click Me"
+                }
+            }
+        "#;
+        
+        let mut lexer = Lexer::new(source, "test.kry".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse().unwrap();
+        
+        // Verify that an App element was auto-created
+        match ast {
+            AstNode::File { app: Some(app), .. } => {
+                match app.as_ref() {
+                    AstNode::Element { element_type, properties, children, .. } => {
+                        assert_eq!(element_type, "App");
+                        
+                        // Check for default App properties
+                        assert!(properties.iter().any(|p| p.key == "window_title"));
+                        assert!(properties.iter().any(|p| p.key == "window_width"));
+                        assert!(properties.iter().any(|p| p.key == "window_height"));
+                        
+                        // Check that standalone elements were wrapped as children
+                        assert_eq!(children.len(), 2); // Text and Container
+                        
+                        // Verify first child is Text
+                        if let AstNode::Element { element_type, .. } = &children[0] {
+                            assert_eq!(element_type, "Text");
+                        } else {
+                            panic!("Expected first child to be Text element");
+                        }
+                        
+                        // Verify second child is Container with its own children
+                        if let AstNode::Element { element_type, children: container_children, .. } = &children[1] {
+                            assert_eq!(element_type, "Container");
+                            assert_eq!(container_children.len(), 1); // Button
+                            
+                            if let AstNode::Element { element_type, .. } = &container_children[0] {
+                                assert_eq!(element_type, "Button");
+                            } else {
+                                panic!("Expected Container child to be Button element");
+                            }
+                        } else {
+                            panic!("Expected second child to be Container element");
+                        }
+                    }
+                    _ => panic!("Expected auto-generated App element"),
+                }
+            }
+            _ => panic!("Expected File with auto-generated App"),
+        }
+    }
+
+    #[test]
+    fn test_no_auto_app_wrapper_when_app_exists() {
+        // Test that no auto-wrapper is created when App already exists
+        let source = r#"
+            App {
+                window_title: "Existing App"
+                
+                Text {
+                    text: "Hello World"
+                }
+            }
+        "#;
+        
+        let mut lexer = Lexer::new(source, "test.kry".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse().unwrap();
+        
+        // Verify the existing App is preserved, not wrapped
+        match ast {
+            AstNode::File { app: Some(app), .. } => {
+                match app.as_ref() {
+                    AstNode::Element { element_type, properties, children, .. } => {
+                        assert_eq!(element_type, "App");
+                        
+                        // Should have the original window_title, not auto-generated
+                        let title_prop = properties.iter().find(|p| p.key == "window_title").unwrap();
+                        assert_eq!(title_prop.value, "\"Existing App\"");
+                        
+                        // Should have one child (the Text element)
+                        assert_eq!(children.len(), 1);
+                    }
+                    _ => panic!("Expected original App element"),
+                }
+            }
+            _ => panic!("Expected File with original App"),
+        }
+    }
+
     #[test]
     fn test_parse_component() {
         let source = r#"

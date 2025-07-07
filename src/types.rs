@@ -115,6 +115,45 @@ impl PropertyId {
             "version" => PropertyId::Version,                      // 0x27
             "author" => PropertyId::Author,                        // 0x28
             
+            // CSS Grid Properties (0x30-0x3F)
+            "grid_template_columns" | "grid-template-columns" => PropertyId::GridTemplateColumns, // 0x30
+            "grid_template_rows" | "grid-template-rows" => PropertyId::GridTemplateRows,           // 0x31
+            "grid_column" | "grid-column" => PropertyId::GridColumn,                               // 0x32
+            "grid_row" | "grid-row" => PropertyId::GridRow,                                        // 0x33
+            "grid_area" | "grid-area" => PropertyId::GridArea,                                     // 0x34
+            "grid_column_gap" | "grid-column-gap" | "column_gap" => PropertyId::GridColumnGap,    // 0x35
+            "grid_row_gap" | "grid-row-gap" | "row_gap" => PropertyId::GridRowGap,                // 0x36
+            "grid_auto_flow" | "grid-auto-flow" => PropertyId::GridAutoFlow,                      // 0x37
+            "grid_auto_columns" | "grid-auto-columns" => PropertyId::GridAutoColumns,             // 0x38
+            "grid_auto_rows" | "grid-auto-rows" => PropertyId::GridAutoRows,                      // 0x39
+            
+            // Modern Flexbox Properties (0x40-0x4F)
+            "display" => PropertyId::Display,                                                     // 0x40
+            "flex_direction" | "flex-direction" => PropertyId::FlexDirection,                     // 0x41
+            "flex_wrap" | "flex-wrap" => PropertyId::FlexWrap,                                     // 0x42
+            "flex_grow" | "flex-grow" => PropertyId::FlexGrow,                                     // 0x43
+            "flex_shrink" | "flex-shrink" => PropertyId::FlexShrink,                              // 0x44
+            "flex_basis" | "flex-basis" => PropertyId::FlexBasis,                                 // 0x45
+            "align_items" | "align-items" => PropertyId::AlignItems,                              // 0x46
+            "align_self" | "align-self" => PropertyId::AlignSelf,                                 // 0x47
+            "align_content" | "align-content" => PropertyId::AlignContent,                        // 0x48
+            "justify_content" | "justify-content" => PropertyId::JustifyContent,                  // 0x49
+            "justify_items" | "justify-items" => PropertyId::JustifyItems,                        // 0x4A
+            "justify_self" | "justify-self" => PropertyId::JustifySelf,                           // 0x4B
+            
+            // Positioning Properties (0x50-0x5F)
+            "position" => PropertyId::Position,                                                    // 0x50
+            "top" => PropertyId::Top,                                                              // 0x51
+            "right" => PropertyId::Right,                                                          // 0x52
+            "bottom" => PropertyId::Bottom,                                                        // 0x53
+            "left" => PropertyId::Left,                                                            // 0x54
+            "inset" => PropertyId::Inset,                                                          // 0x55
+            
+            // Sizing Properties (0x60-0x6F)
+            "min_size" | "min-size" => PropertyId::MinSize,                                       // 0x60
+            "max_size" | "max-size" => PropertyId::MaxSize,                                       // 0x61
+            "preferred_size" | "preferred-size" => PropertyId::PreferredSize,                     // 0x62
+            
             _ => PropertyId::CustomData,
         }
     }
@@ -170,6 +209,45 @@ pub enum PropertyId {
     Author = 0x28,
     Cursor = 0x29,
     Checked = 0x2A,
+    
+    // Taffy CSS Grid Properties (0x30-0x3F)
+    GridTemplateColumns = 0x30,
+    GridTemplateRows = 0x31,
+    GridColumn = 0x32,
+    GridRow = 0x33,
+    GridArea = 0x34,
+    GridColumnGap = 0x35,
+    GridRowGap = 0x36,
+    GridAutoFlow = 0x37,
+    GridAutoColumns = 0x38,
+    GridAutoRows = 0x39,
+    
+    // Taffy Modern Flexbox Properties (0x40-0x4F)
+    Display = 0x40,
+    FlexDirection = 0x41,
+    FlexWrap = 0x42,
+    FlexGrow = 0x43,
+    FlexShrink = 0x44,
+    FlexBasis = 0x45,
+    AlignItems = 0x46,
+    AlignSelf = 0x47,
+    AlignContent = 0x48,
+    JustifyContent = 0x49,
+    JustifyItems = 0x4A,
+    JustifySelf = 0x4B,
+    
+    // Taffy Positioning Properties (0x50-0x5F)
+    Position = 0x50,
+    Top = 0x51,
+    Right = 0x52,
+    Bottom = 0x53,
+    Left = 0x54,
+    Inset = 0x55,
+    
+    // Taffy Sizing Properties (0x60-0x6F)
+    MinSize = 0x60,
+    MaxSize = 0x61,
+    PreferredSize = 0x62,
 }
 
 // Value Types
@@ -193,14 +271,23 @@ pub enum ValueType {
     Float = 0x0D,
     Int = 0x0E,
     Bool = 0x0F,
+    
+    // Taffy-specific value types
+    GridTrack = 0x10,        // fr, px, %, auto units for grid tracks
+    GridArea = 0x11,         // Grid area specification (line-based)
+    FlexValue = 0x12,        // Flex grow/shrink values
+    AlignmentValue = 0x13,   // Alignment enum values
+    PositionValue = 0x14,    // Position enum (relative, absolute, etc.)
+    LengthPercentage = 0x15, // CSS length-percentage values
+    Dimension = 0x16,        // Auto, Length, Percentage dimension
 }
 
-// Layout flags
+// Layout flags (must match renderer's LayoutDirection enum)
 pub const LAYOUT_DIRECTION_MASK: u8 = 0x03;
-pub const LAYOUT_DIRECTION_ROW: u8 = 0;
-pub const LAYOUT_DIRECTION_COLUMN: u8 = 1;
-pub const LAYOUT_DIRECTION_ROW_REV: u8 = 2;
-pub const LAYOUT_DIRECTION_COL_REV: u8 = 3;
+pub const LAYOUT_DIRECTION_ROW: u8 = 0;        // Row layout
+pub const LAYOUT_DIRECTION_COLUMN: u8 = 1;     // Column layout  
+pub const LAYOUT_DIRECTION_ABSOLUTE: u8 = 2;   // Absolute positioning
+// Note: ROW_REV and COL_REV are not supported by the renderer
 
 pub const LAYOUT_ALIGNMENT_MASK: u8 = 0x0C;
 pub const LAYOUT_ALIGNMENT_START: u8 = 0 << 2;

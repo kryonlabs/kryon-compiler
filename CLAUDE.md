@@ -84,6 +84,8 @@ Component Resolution → Style Resolution → Size Calculation → Code Generati
 The compiler supports a declarative UI language with:
 - **Elements**: App, Container, Text, Button, Input, Image
 - **Styling**: CSS-like styles with inheritance and pseudo-selectors (`:hover`, `:active`)
+- **Layout System**: Flex and absolute positioning with proper layout flag compilation
+- **Percentage Support**: CSS-like percentage sizing (width: 100%, height: 50%)
 - **Components**: Reusable UI components with properties and templates
 - **Variables**: `@variables` blocks with expression evaluation and substitution
 - **Scripts**: Multi-language scripting (Lua, JavaScript, Python, Wren)
@@ -119,8 +121,11 @@ The compiler supports configuration via JSON/TOML files:
 
 According to `ROADMAP.md`, the project is in active development:
 - ✅ **Completed**: CLI, optimization levels, target platforms, configuration
-- 🟡 **Partially Implemented**: KRY parsing, KRB generation, style resolution, components
-- 🔴 **Missing**: Full language parser implementation, complete binary generation
+- ✅ **Completed**: KRY parsing with percentage support, layout flag compilation
+- ✅ **Completed**: KRB generation with proper style resolution and property conversion
+- ✅ **Completed**: Variable substitution and expression evaluation system
+- 🟡 **Partially Implemented**: Component definitions and template expansion
+- 🔴 **Missing**: Advanced optimization passes, resource bundling, animation support
 
 The current focus is on Phase 1 (MVP Compiler) to achieve basic KRY→KRB compilation that works with the kryon-renderer runtime.
 

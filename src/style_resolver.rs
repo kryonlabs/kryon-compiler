@@ -353,18 +353,36 @@ impl StyleResolver {
                 })
             }
             PropertyId::Width | PropertyId::Height => {
-                // Handle width/height properties as u16 values
+                // Handle width/height properties as u16 values or percentages
                 if let Ok(size) = cleaned_value.parse::<u16>() {
+                    // Regular pixel value
                     Some(KrbProperty {
                         property_id: property_id as u8,
                         value_type: ValueType::Short,
                         size: 2,
                         value: size.to_le_bytes().to_vec(),
                     })
+                } else if cleaned_value.ends_with('%') {
+                    // Percentage value - parse as float and store as percentage type
+                    let percent_str = &cleaned_value[..cleaned_value.len() - 1]; // Remove '%'
+                    if let Ok(percent) = percent_str.parse::<f32>() {
+                        // Store percentage as 4-byte float
+                        Some(KrbProperty {
+                            property_id: property_id as u8,
+                            value_type: ValueType::Percentage,
+                            size: 4,
+                            value: percent.to_le_bytes().to_vec(),
+                        })
+                    } else {
+                        return Err(CompilerError::semantic_legacy(
+                            source_prop.line_num,
+                            format!("Invalid percentage value: {}", cleaned_value)
+                        ));
+                    }
                 } else {
                     return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
-                        format!("Invalid size value: {}", cleaned_value)
+                        format!("Invalid size value: {} (must be a number or percentage)", cleaned_value)
                     ));
                 }
             }

@@ -365,11 +365,16 @@ impl SemanticAnalyzer {
                 }
             }
             key if key.contains("width") || key.contains("height") || key.contains("size") => {
-                if !value.chars().all(|c| c.is_ascii_digit()) && 
-                   !value.starts_with('$') && !value.starts_with('"') {
+                // Allow numbers, percentages (ending with %), variables ($var), and strings ("value")
+                let is_valid = value.chars().all(|c| c.is_ascii_digit() || c == '.') || // Pure number (including decimals)
+                              value.ends_with('%') || // Percentage values like 100%, 50.5%
+                              value.starts_with('$') || // Variables
+                              value.starts_with('"'); // Strings
+                
+                if !is_valid {
                     return Err(CompilerError::semantic_legacy(
                         line,
-                        format!("Size property '{}' must be a number, variable, or string", key)
+                        format!("Size property '{}' must be a number, percentage (%), variable ($var), or string", key)
                     ));
                 }
             }
@@ -560,7 +565,13 @@ impl SemanticAnalyzer {
             "window_title" | "window_width" | "window_height" | "window_min_width" |
             "window_min_height" | "window_max_width" | "window_max_height" |
             "resizable" | "keep_aspect_ratio" | "scale_factor" | "icon" |
-            "version" | "author" | "background_color" | "id" | "style" | "layout" | "visible"
+            "version" | "author" | "background_color" | "id" | "style" | "layout" | "visible" |
+            // Modern Taffy layout properties
+            "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
+            "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
+            "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            "min_size" | "max_size" | "preferred_size" | "gap" | "row_gap" | "column_gap" |
+            "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row"
         )
     }
     
@@ -570,7 +581,11 @@ impl SemanticAnalyzer {
             "text_alignment" | "line_height" | "text_decoration" | "text_transform" |
             "id" | "pos_x" | "pos_y" | "width" | "height" | "style" | "layout" |
             "background_color" | "border_color" | "border_width" | "border_radius" |
-            "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index"
+            "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            // Modern Taffy layout properties
+            "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
+            "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
+            "position" | "top" | "right" | "bottom" | "left" | "inset"
         )
     }
     
@@ -592,7 +607,11 @@ impl SemanticAnalyzer {
         matches!(key,
             "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" | "layout" |
             "style" | "background_color" | "border_color" | "border_width" |
-            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index"
+            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            // Modern Taffy layout properties
+            "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
+            "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
+            "position" | "top" | "right" | "bottom" | "left" | "inset"
         )
     }
     
@@ -601,7 +620,12 @@ impl SemanticAnalyzer {
             "layout" | "gap" | "id" | "pos_x" | "pos_y" | "width" | "height" |
             "min_width" | "min_height" | "max_width" | "max_height" |
             "style" | "background_color" | "border_color" | "border_width" |
-            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index"
+            "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            // Modern Taffy layout properties
+            "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
+            "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
+            "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row"
         )
     }
     

@@ -855,22 +855,13 @@ fn convert_element_to_state(
 fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState) -> Result<Option<KrbProperty>> {
     let cleaned_value = ast_prop.cleaned_value();
     
-    // This is a comprehensive mapping for all standard properties.
-    let property_id = match ast_prop.key.as_str() {
-        "background_color" => PropertyId::BackgroundColor,
-        "text_color" => PropertyId::ForegroundColor,
-        "border_color" => PropertyId::BorderColor,
-        "border_width" => PropertyId::BorderWidth,
-        "border_radius" => PropertyId::BorderRadius,
-        "text" => PropertyId::TextContent,
-        "window_title" => PropertyId::WindowTitle,
-        "text_alignment" => PropertyId::TextAlignment,
-        "layout" => PropertyId::LayoutFlags,
-        "height" => PropertyId::Height,
-        "width" => PropertyId::Width,
-        // Add any other properties you need to support here.
-        _ => return Ok(None), // Safely ignore properties we don't recognize.
-    };
+    // Use the comprehensive mapping from PropertyId::from_name()
+    let property_id = PropertyId::from_name(&ast_prop.key);
+    
+    // If it's CustomData (unknown property), store as custom property
+    if property_id == PropertyId::CustomData {
+        return Ok(None); // Will be handled as custom property elsewhere
+    }
     
     // Now, correctly serialize the value based on the property ID.
     let krb_prop = match property_id {
@@ -914,11 +905,51 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Byte, size: 1, value: vec![layout_value] })
         }
         PropertyId::Height | PropertyId::Width => {
-            // Parse numeric value as u16
+            // Parse numeric value as u16 or percentage
             if let Ok(val) = cleaned_value.parse::<u16>() {
+                // Regular pixel value
                 Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Short, size: 2, value: val.to_le_bytes().to_vec() })
+            } else if cleaned_value.ends_with('%') {
+                // Percentage value - parse as float and store as percentage type
+                let percent_str = &cleaned_value[..cleaned_value.len() - 1]; // Remove '%'
+                if let Ok(percent) = percent_str.parse::<f32>() {
+                    // Store percentage as 4-byte float
+                    Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Percentage, size: 4, value: percent.to_le_bytes().to_vec() })
+                } else {
+                    return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid percentage value for {}: {}", ast_prop.key, cleaned_value)));
+                }
             } else {
-                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid numeric value for {}: {}", ast_prop.key, cleaned_value)));
+                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid numeric value for {}: {} (must be a number or percentage)", ast_prop.key, cleaned_value)));
+            }
+        }
+        // Modern Taffy layout properties
+        PropertyId::Display | PropertyId::FlexDirection | PropertyId::Position |
+        PropertyId::AlignItems | PropertyId::AlignContent | PropertyId::JustifyContent |
+        PropertyId::JustifyItems | PropertyId::JustifySelf | PropertyId::AlignSelf => {
+            // Store as string index like other string properties
+            let string_index = state.strings.iter().position(|s| s.text == cleaned_value).map(|i| i as u8).unwrap_or_else(|| {
+                let index = state.strings.len() as u8;
+                state.strings.push(StringEntry { text: cleaned_value.clone(), length: cleaned_value.len(), index });
+                index
+            });
+            Some(KrbProperty { 
+                property_id: property_id as u8, 
+                value_type: ValueType::String, 
+                size: 1, 
+                value: vec![string_index] 
+            })
+        }
+        PropertyId::FlexGrow | PropertyId::FlexShrink => {
+            // Store as float values
+            if let Ok(val) = cleaned_value.parse::<f32>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Percentage, // Reuse percentage type for float
+                    size: 4,
+                    value: val.to_le_bytes().to_vec(),
+                })
+            } else {
+                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid float value for {}: {}", ast_prop.key, cleaned_value)));
             }
         }
         _ => None, // Should not be reached due to the initial match, but it's safe.

@@ -54,6 +54,7 @@ pub enum TokenType {
     String(String),
     Number(f64),
     Integer(i64),
+    Percentage(f64), // 50%, 100%, etc.
     Boolean(bool),
     Color(String), // #RGB, #RRGGBB, #RRGGBBAA
     Identifier(String),
@@ -115,6 +116,7 @@ impl fmt::Display for TokenType {
             TokenType::String(s) => write!(f, "string(\"{}\")", s),
             TokenType::Number(n) => write!(f, "number({})", n),
             TokenType::Integer(i) => write!(f, "integer({})", i),
+            TokenType::Percentage(p) => write!(f, "percentage({}%)", p),
             TokenType::Boolean(b) => write!(f, "boolean({})", b),
             TokenType::Color(c) => write!(f, "color({})", c),
             TokenType::Identifier(id) => write!(f, "identifier({})", id),
@@ -326,9 +328,19 @@ impl Lexer {
                 if self.peek().map_or(false, |c| c.is_ascii_digit()) {
                     // This is a decimal number starting with .
                     let number_str = self.read_number(ch)?;
-                    TokenType::Number(number_str.parse().map_err(|_| {
-                        self.parse_error(format!("Invalid number: {}", number_str))
-                    })?)
+                    
+                    // Check if this is followed by a percentage sign
+                    if self.peek() == Some('%') {
+                        self.advance(); // consume the '%'
+                        let value = number_str.parse::<f64>().map_err(|_| {
+                            self.parse_error(format!("Invalid percentage number: {}", number_str))
+                        })?;
+                        TokenType::Percentage(value)
+                    } else {
+                        TokenType::Number(number_str.parse().map_err(|_| {
+                            self.parse_error(format!("Invalid number: {}", number_str))
+                        })?)
+                    }
                 } else {
                     TokenType::Dot
                 }
@@ -397,7 +409,15 @@ impl Lexer {
             }
             ch if ch.is_ascii_digit() || (ch == '-' && self.peek().map_or(false, |c| c.is_ascii_digit())) => {
                 let number_str = self.read_number(ch)?;
-                if number_str.contains('.') {
+                
+                // Check if this is followed by a percentage sign
+                if self.peek() == Some('%') {
+                    self.advance(); // consume the '%'
+                    let value = number_str.parse::<f64>().map_err(|_| {
+                        self.parse_error(format!("Invalid percentage number: {}", number_str))
+                    })?;
+                    TokenType::Percentage(value)
+                } else if number_str.contains('.') {
                     TokenType::Number(number_str.parse().map_err(|_| {
                         self.parse_error(format!("Invalid number: {}", number_str))
                     })?)
