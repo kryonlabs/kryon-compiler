@@ -730,6 +730,13 @@ fn convert_element_to_state(
         };
         
         for ast_prop in properties {
+            // Always add to source properties for template processing
+            element.source_properties.push(SourceProperty {
+                key: ast_prop.key.clone(),
+                value: ast_prop.value.clone(),
+                line_num: ast_prop.line,
+            });
+            
             match ast_prop.key.as_str() {
                 // Handle element header fields directly
                 "pos_x" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.pos_x = val; },
