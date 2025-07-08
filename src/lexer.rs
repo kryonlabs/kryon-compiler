@@ -47,6 +47,10 @@ pub enum TokenType {
     Dollar,       // $
     Dot,          // .
     
+    // Template variables
+    DoubleLeftBrace,  // {{
+    DoubleRightBrace, // }}
+    
     // Pseudo-selector
     PseudoSelector(String), // &:hover, &:active, etc.
     
@@ -59,6 +63,7 @@ pub enum TokenType {
     Color(String), // #RGB, #RRGGBB, #RRGGBBAA
     Identifier(String),
     ScriptContent(String), // Raw script content inside @function or @script blocks
+    TemplateVariable(String), // Variable name inside {{ }}
     
     // Special
     Newline,
@@ -112,6 +117,8 @@ impl fmt::Display for TokenType {
             TokenType::Ampersand => write!(f, "&"),
             TokenType::Dollar => write!(f, "$"),
             TokenType::Dot => write!(f, "."),
+            TokenType::DoubleLeftBrace => write!(f, "{{{{"),
+            TokenType::DoubleRightBrace => write!(f, "}}}}"),
             TokenType::PseudoSelector(state) => write!(f, "pseudo-selector({})", state),
             TokenType::String(s) => write!(f, "string(\"{}\")", s),
             TokenType::Number(n) => write!(f, "number({})", n),
@@ -121,6 +128,7 @@ impl fmt::Display for TokenType {
             TokenType::Color(c) => write!(f, "color({})", c),
             TokenType::Identifier(id) => write!(f, "identifier({})", id),
             TokenType::ScriptContent(content) => write!(f, "script_content({})", content),
+            TokenType::TemplateVariable(var) => write!(f, "template_variable({})", var),
             TokenType::Newline => write!(f, "newline"),
             TokenType::Comment(c) => write!(f, "comment({})", c),
             TokenType::Eof => write!(f, "EOF"),
@@ -312,8 +320,24 @@ impl Lexer {
                 self.column = 1;
                 TokenType::Newline
             }
-            '{' => TokenType::LeftBrace,
-            '}' => TokenType::RightBrace,
+            '{' => {
+                // Check for double left brace {{
+                if self.peek() == Some('{') {
+                    self.advance(); // consume the second {
+                    TokenType::DoubleLeftBrace
+                } else {
+                    TokenType::LeftBrace
+                }
+            }
+            '}' => {
+                // Check for double right brace }}
+                if self.peek() == Some('}') {
+                    self.advance(); // consume the second }
+                    TokenType::DoubleRightBrace
+                } else {
+                    TokenType::RightBrace
+                }
+            }
             '[' => TokenType::LeftBracket,
             ']' => TokenType::RightBracket,
             '(' => TokenType::LeftParen,
