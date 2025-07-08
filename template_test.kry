@@ -1,0 +1,29 @@
+// Test file for template variable script integration
+App {
+    Text display {
+        text: "Count: {{counter_value}}"
+    }
+}
+
+@variables {
+    counter_value: 0
+}
+
+@script "lua" {
+    function init()
+        print("Initial counter value: " .. getTemplateVariable("counter_value"))
+        
+        -- Update the counter every frame
+        setTemplateVariable("counter_value", "5")
+        print("Updated counter to 5")
+        
+        -- Show all template variables
+        local vars = getTemplateVariables()
+        for name, value in pairs(vars) do
+            print("Template variable: " .. name .. " = " .. value)
+        end
+    end
+    
+    -- Call init on script load
+    init()
+}

@@ -1,0 +1,23 @@
+// Complete test of template variable system
+App {
+    window_title: "Template Test"
+    
+    Text display {
+        text: "Value: {{test_var}}"
+    }
+    
+    Button set_button {
+        text: "Set to 42"
+        onClick: "set_value"
+    }
+}
+
+@variables {
+    test_var: "initial"
+}
+
+@function "lua" set_value() {
+    print("Setting template variable to 42")
+    setTemplateVariable("test_var", "42")
+    print("Template variable set! Current value: " .. getTemplateVariable("test_var"))
+}
