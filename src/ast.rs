@@ -68,6 +68,8 @@ pub struct AstProperty {
     pub key: String,
     pub value: String,
     pub line: usize,
+    pub template_variables: Vec<String>, // Variables used in {{}} syntax
+    pub has_templates: bool, // Quick check if this property has template variables
 }
 
 /// Component property definition
@@ -96,7 +98,24 @@ pub enum ScriptSource {
 
 impl AstProperty {
     pub fn new(key: String, value: String, line: usize) -> Self {
-        Self { key, value, line }
+        Self { 
+            key, 
+            value, 
+            line,
+            template_variables: Vec::new(),
+            has_templates: false,
+        }
+    }
+    
+    pub fn new_with_templates(key: String, value: String, line: usize, template_variables: Vec<String>) -> Self {
+        let has_templates = !template_variables.is_empty();
+        Self { 
+            key, 
+            value, 
+            line,
+            template_variables,
+            has_templates,
+        }
     }
     
     /// Get the cleaned value (without quotes if it was quoted)

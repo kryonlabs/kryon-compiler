@@ -4,6 +4,7 @@ use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::lexer::{Token, TokenType};
 use std::collections::HashMap;
+use regex::Regex;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -676,7 +677,14 @@ impl Parser {
         // Optional semicolon
         self.match_token(&TokenType::Semicolon);
         
-        Ok(AstProperty::new(key, value, self.previous().line))
+        // Extract template variables from the value
+        let template_variables = self.extract_template_variables(&value);
+        
+        if template_variables.is_empty() {
+            Ok(AstProperty::new(key, value, self.previous().line))
+        } else {
+            Ok(AstProperty::new_with_templates(key, value, self.previous().line, template_variables))
+        }
     }
     
     fn parse_value(&mut self) -> Result<String> {
@@ -917,6 +925,24 @@ impl Parser {
         log::info!("Auto-created App wrapper for {} standalone elements", element_count);
         Ok(Some(Box::new(default_app)))
     }
+    
+    /// Extract template variables from a string value
+    /// Finds patterns like {{variable_name}} and returns a list of variable names
+    fn extract_template_variables(&self, value: &str) -> Vec<String> {
+        let re = Regex::new(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap();
+        let mut variables = Vec::new();
+        
+        for capture in re.captures_iter(value) {
+            if let Some(var_name) = capture.get(1) {
+                let name = var_name.as_str().to_string();
+                if !variables.contains(&name) {
+                    variables.push(name);
+                }
+            }
+        }
+        
+        variables
+    }
 }
 
 #[cfg(test)]
@@ -1090,5 +1116,26 @@ mod tests {
             }
             _ => panic!("Expected File with components"),
         }
+    }
+
+    #[test]
+    fn test_template_variable_extraction() {
+        let parser = Parser::new(Vec::new());
+        
+        // Test simple template variable
+        let vars = parser.extract_template_variables("Count: {{counter_value}}");
+        assert_eq!(vars, vec!["counter_value"]);
+        
+        // Test multiple template variables
+        let vars = parser.extract_template_variables("Hello {{user_name}}, count: {{counter_value}}");
+        assert_eq!(vars, vec!["user_name", "counter_value"]);
+        
+        // Test no template variables
+        let vars = parser.extract_template_variables("Plain text");
+        assert!(vars.is_empty());
+        
+        // Test duplicate variables (should only appear once)
+        let vars = parser.extract_template_variables("{{var}} and {{var}} again");
+        assert_eq!(vars, vec!["var"]);
     }
 }
