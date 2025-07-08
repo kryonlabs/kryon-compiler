@@ -29,6 +29,9 @@ impl SizeCalculator {
         // Calculate resource table size
         self.calculate_resource_table_size(state);
         
+        // Calculate template variable sizes
+        self.calculate_template_variable_sizes(state);
+        
         // Calculate section offsets
         self.calculate_section_offsets(state);
         
@@ -162,6 +165,24 @@ impl SizeCalculator {
         
         state.total_resource_table_size = total_size;
     }
+    
+    fn calculate_template_variable_sizes(&self, state: &mut CompilerState) {
+        // Calculate template variables table size
+        let mut template_var_size = 0u32;
+        for _template_var in &state.template_variables {
+            // Each template variable: name_index (1) + value_type (1) + default_value_index (1) = 3 bytes
+            template_var_size += 3;
+        }
+        state.total_template_variable_size = template_var_size;
+        
+        // Calculate template bindings table size
+        let mut template_binding_size = 0u32;
+        for binding in &state.template_bindings {
+            // Each binding: element_index (2) + property_id (1) + expression_index (1) + variable_count (1) + variable_indices
+            template_binding_size += 5 + binding.variable_indices.len() as u32;
+        }
+        state.total_template_binding_size = template_binding_size;
+    }
         
     pub fn calculate_section_offsets(&self, state: &mut CompilerState) {
         let mut current_offset = KRB_HEADER_SIZE as u32;
@@ -198,7 +219,15 @@ impl SizeCalculator {
         state.resource_offset = current_offset;
         current_offset += state.total_resource_table_size;
         
-        // 8. Total file size
+        // 8. Template Variables
+        state.template_variable_offset = current_offset;
+        current_offset += state.total_template_variable_size;
+        
+        // 9. Template Bindings
+        state.template_binding_offset = current_offset;
+        current_offset += state.total_template_binding_size;
+        
+        // 10. Total file size
         state.total_size = current_offset;
     }
     /// Validate that all sizes are within limits

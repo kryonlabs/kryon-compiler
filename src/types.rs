@@ -8,7 +8,7 @@ use crate::ast::AstNode;
 pub const KRB_MAGIC: &[u8; 4] = b"KRB1";
 pub const KRB_VERSION_MAJOR: u8 = 0;
 pub const KRB_VERSION_MINOR: u8 = 5;
-pub const KRB_HEADER_SIZE: usize = 54;
+pub const KRB_HEADER_SIZE: usize = 66;
 pub const KRB_ELEMENT_HEADER_SIZE: usize = 19;
 
 // Header Flags
@@ -22,6 +22,7 @@ pub const FLAG_EXTENDED_COLOR: u16 = 1 << 6;
 pub const FLAG_HAS_APP: u16 = 1 << 7;
 pub const FLAG_HAS_SCRIPTS: u16 = 1 << 8;
 pub const FLAG_HAS_STATE_PROPERTIES: u16 = 1 << 9;
+pub const FLAG_HAS_TEMPLATE_VARIABLES: u16 = 1 << 10;
 
 // Element Types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,6 +443,27 @@ pub struct ComponentDefinition {
     pub internal_template_element_offsets: HashMap<usize, u32>,
 }
 
+/// Template variable definition in KRB format
+#[derive(Debug, Clone)]
+pub struct TemplateVariable {
+    pub name: String,
+    pub name_index: u8,
+    pub value_type: ValueType,
+    pub default_value: String,
+    pub default_value_index: u8,
+}
+
+/// Template binding that connects a property to template variables
+#[derive(Debug, Clone)]
+pub struct TemplateBinding {
+    pub element_index: u16,
+    pub property_id: u8,
+    pub template_expression: String,
+    pub template_expression_index: u8,
+    pub variable_count: u8,
+    pub variable_indices: Vec<u8>, // Indices into the template variables array
+}
+
 #[derive(Debug, Clone)]
 pub struct ScriptFunction {
     pub function_name: String,
@@ -568,6 +590,14 @@ pub struct CompilerState {
     pub total_script_data_size: u32,
     pub total_string_data_size: u32,
     pub total_resource_table_size: u32,
+    
+    // Template variable data
+    pub template_variables: Vec<TemplateVariable>,
+    pub template_bindings: Vec<TemplateBinding>,
+    pub template_variable_offset: u32,
+    pub template_binding_offset: u32,
+    pub total_template_variable_size: u32,
+    pub total_template_binding_size: u32,
 }
 
 impl CompilerState {
@@ -600,6 +630,12 @@ impl CompilerState {
             total_script_data_size: 0,
             total_string_data_size: 0,
             total_resource_table_size: 0,
+            template_variables: Vec::new(),
+            template_bindings: Vec::new(),
+            template_variable_offset: 0,
+            template_binding_offset: 0,
+            total_template_variable_size: 0,
+            total_template_binding_size: 0,
         }
     }
 }

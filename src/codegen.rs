@@ -46,6 +46,8 @@ impl CodeGenerator {
         self.output.write_u16::<LittleEndian>(state.scripts.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.strings.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.resources.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.template_variables.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.template_bindings.len() as u16)?;
         
         // Section offsets (now correct)
         self.output.write_u32::<LittleEndian>(state.element_offset)?;
@@ -55,6 +57,8 @@ impl CodeGenerator {
         self.output.write_u32::<LittleEndian>(state.script_offset)?;
         self.output.write_u32::<LittleEndian>(state.string_offset)?;
         self.output.write_u32::<LittleEndian>(state.resource_offset)?;
+        self.output.write_u32::<LittleEndian>(state.template_variable_offset)?;
+        self.output.write_u32::<LittleEndian>(state.template_binding_offset)?;
         
         // Total size
         self.output.write_u32::<LittleEndian>(state.total_size)?;
@@ -94,6 +98,12 @@ impl CodeGenerator {
         // Section: Resource Table
         self.write_resource_table(state)?;
         
+        // Section: Template Variables
+        self.write_template_variable_table(state)?;
+        
+        // Section: Template Bindings
+        self.write_template_binding_table(state)?;
+        
         // 4. Final validation (optional but good practice)
         if self.output.len() != state.total_size as usize {
             return Err(CompilerError::CodeGen {
@@ -132,9 +142,11 @@ impl CodeGenerator {
         self.output.write_u16::<LittleEndian>(state.scripts.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.strings.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.resources.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.template_variables.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.template_bindings.len() as u16)?;
         
         // Section offsets (placeholders - will be updated later)
-        for _ in 0..7 {
+        for _ in 0..9 {
             self.output.write_u32::<LittleEndian>(0)?;
         }
         
@@ -361,6 +373,32 @@ impl CodeGenerator {
         Ok(())
     }
     
+    fn write_template_variable_table(&mut self, state: &CompilerState) -> Result<()> {
+        for template_var in &state.template_variables {
+            self.output.push(template_var.name_index);
+            self.output.push(template_var.value_type as u8);
+            self.output.push(template_var.default_value_index);
+        }
+        
+        Ok(())
+    }
+    
+    fn write_template_binding_table(&mut self, state: &CompilerState) -> Result<()> {
+        for binding in &state.template_bindings {
+            self.output.write_u16::<LittleEndian>(binding.element_index)?;
+            self.output.push(binding.property_id);
+            self.output.push(binding.template_expression_index);
+            self.output.push(binding.variable_count);
+            
+            // Write variable indices
+            for &var_index in &binding.variable_indices {
+                self.output.push(var_index);
+            }
+        }
+        
+        Ok(())
+    }
+    
     fn update_header_offsets(
         &mut self,
         element_offset: u32,
@@ -370,12 +408,14 @@ impl CodeGenerator {
         script_offset: u32,
         string_offset: u32,
         resource_offset: u32,
+        template_variable_offset: u32,
+        template_binding_offset: u32,
         total_size: u32,
     ) -> Result<()> {
         let mut cursor = Cursor::new(&mut self.output);
         
-        // Skip to offset section (magic + version + flags + counts = 22 bytes)
-        cursor.set_position(22);
+        // Skip to offset section (magic + version + flags + counts = 26 bytes)
+        cursor.set_position(26);
         
         // Write offsets in correct order per spec
         cursor.write_u32::<LittleEndian>(element_offset)?;
@@ -385,6 +425,8 @@ impl CodeGenerator {
         cursor.write_u32::<LittleEndian>(script_offset)?;
         cursor.write_u32::<LittleEndian>(string_offset)?;
         cursor.write_u32::<LittleEndian>(resource_offset)?;
+        cursor.write_u32::<LittleEndian>(template_variable_offset)?;
+        cursor.write_u32::<LittleEndian>(template_binding_offset)?;
         cursor.write_u32::<LittleEndian>(total_size)?;
         
         Ok(())

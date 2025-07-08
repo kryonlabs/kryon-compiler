@@ -546,6 +546,18 @@ pub fn compile_source_with_options(
         }
     }
     
+    // Phase 1.6: Process template variables
+    if options.debug_mode {
+        log::debug!("Phase 1.6: Processing template variables...");
+    }
+    
+    process_template_variables(&mut state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.6 complete. Template variables: {}, bindings: {}", 
+                   state.template_variables.len(), state.template_bindings.len());
+    }
+    
     // Phase 2: Calculate sizes
     if options.debug_mode {
         log::debug!("Phase 2: Calculating sizes...");
@@ -1191,6 +1203,134 @@ fn apply_style_properties_to_elements(state: &mut CompilerState) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Process template variables and create template binding tables
+fn process_template_variables(state: &mut CompilerState) -> Result<()> {
+    use std::collections::HashMap;
+    
+    // Collect all variables from @variables blocks
+    let mut variable_map: HashMap<String, (u8, ValueType)> = HashMap::new();
+    
+    // First, create template variables from the @variables block
+    for (var_name, var_def) in &state.variables {
+        let name_index = state.strings.iter().position(|s| s.text == *var_name)
+            .map(|i| i as u8)
+            .unwrap_or_else(|| {
+                let index = state.strings.len() as u8;
+                state.strings.push(StringEntry {
+                    text: var_name.clone(),
+                    length: var_name.len(),
+                    index,
+                });
+                index
+            });
+        
+        let default_value_index = state.strings.iter().position(|s| s.text == var_def.value)
+            .map(|i| i as u8)
+            .unwrap_or_else(|| {
+                let index = state.strings.len() as u8;
+                state.strings.push(StringEntry {
+                    text: var_def.value.clone(),
+                    length: var_def.value.len(),
+                    index,
+                });
+                index
+            });
+        
+        // Determine value type based on the value
+        let value_type = if var_def.value.parse::<i32>().is_ok() {
+            ValueType::Int
+        } else if var_def.value.parse::<f32>().is_ok() {
+            ValueType::Float
+        } else if var_def.value == "true" || var_def.value == "false" {
+            ValueType::Bool
+        } else {
+            ValueType::String
+        };
+        
+        let template_var = TemplateVariable {
+            name: var_name.clone(),
+            name_index,
+            value_type,
+            default_value: var_def.value.clone(),
+            default_value_index,
+        };
+        
+        variable_map.insert(var_name.clone(), (state.template_variables.len() as u8, value_type));
+        state.template_variables.push(template_var);
+    }
+    
+    // Now scan through all elements for properties with template variables
+    for (element_index, element) in state.elements.iter().enumerate() {
+        for source_prop in &element.source_properties {
+            // Check if this property has template variables
+            let template_variables = extract_template_variables(&source_prop.value);
+            
+            if !template_variables.is_empty() {
+                // Get the expression string index
+                let expression_index = state.strings.iter().position(|s| s.text == source_prop.value)
+                    .map(|i| i as u8)
+                    .unwrap_or_else(|| {
+                        let index = state.strings.len() as u8;
+                        state.strings.push(StringEntry {
+                            text: source_prop.value.clone(),
+                            length: source_prop.value.len(),
+                            index,
+                        });
+                        index
+                    });
+                
+                // Map property key to property ID
+                let property_id = PropertyId::from_name(&source_prop.key) as u8;
+                
+                // Get variable indices
+                let mut variable_indices = Vec::new();
+                for var_name in &template_variables {
+                    if let Some((var_index, _)) = variable_map.get(var_name) {
+                        variable_indices.push(*var_index);
+                    }
+                }
+                
+                let template_binding = TemplateBinding {
+                    element_index: element_index as u16,
+                    property_id,
+                    template_expression: source_prop.value.clone(),
+                    template_expression_index: expression_index,
+                    variable_count: variable_indices.len() as u8,
+                    variable_indices,
+                };
+                
+                state.template_bindings.push(template_binding);
+            }
+        }
+    }
+    
+    // Set the template variable flag if we have any template variables
+    if !state.template_variables.is_empty() {
+        state.header_flags |= FLAG_HAS_TEMPLATE_VARIABLES;
+    }
+    
+    Ok(())
+}
+
+/// Extract template variables from a string ({{variable_name}})
+fn extract_template_variables(value: &str) -> Vec<String> {
+    use regex::Regex;
+    
+    let re = Regex::new(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap();
+    let mut variables = Vec::new();
+    
+    for capture in re.captures_iter(value) {
+        if let Some(var_name) = capture.get(1) {
+            let name = var_name.as_str().to_string();
+            if !variables.contains(&name) {
+                variables.push(name);
+            }
+        }
+    }
+    
+    variables
 }
 
 #[cfg(test)]
