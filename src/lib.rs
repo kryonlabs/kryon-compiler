@@ -551,7 +551,7 @@ pub fn compile_source_with_options(
         log::debug!("Phase 1.6: Processing template variables...");
     }
     
-    process_template_variables(&mut state)?;
+    process_template_variables(&mut state, &options)?;
     
     if options.debug_mode {
         log::debug!("Phase 1.6 complete. Template variables: {}, bindings: {}", 
@@ -1213,7 +1213,7 @@ fn apply_style_properties_to_elements(state: &mut CompilerState) -> Result<()> {
 }
 
 /// Process template variables and create template binding tables
-fn process_template_variables(state: &mut CompilerState) -> Result<()> {
+fn process_template_variables(state: &mut CompilerState, options: &CompilerOptions) -> Result<()> {
     use std::collections::HashMap;
     
     // Collect all variables from @variables blocks
@@ -1274,6 +1274,11 @@ fn process_template_variables(state: &mut CompilerState) -> Result<()> {
             // Check if this property has template variables
             let template_variables = extract_template_variables(&source_prop.value);
             
+            if options.debug_mode {
+                log::debug!("Element {}: property '{}' = '{}' -> template vars: {:?}", 
+                           element_index, source_prop.key, source_prop.value, template_variables);
+            }
+            
             if !template_variables.is_empty() {
                 // Get the expression string index
                 let expression_index = state.strings.iter().position(|s| s.text == source_prop.value)
@@ -1321,11 +1326,11 @@ fn process_template_variables(state: &mut CompilerState) -> Result<()> {
     Ok(())
 }
 
-/// Extract template variables from a string ({{variable_name}})
+/// Extract template variables from a string ($variable_name)
 fn extract_template_variables(value: &str) -> Vec<String> {
     use regex::Regex;
     
-    let re = Regex::new(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap();
+    let re = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
     let mut variables = Vec::new();
     
     for capture in re.captures_iter(value) {
@@ -1345,6 +1350,74 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use std::fs;
+    
+    #[test]
+    fn test_extract_template_variables() {
+        let test_cases = vec![
+            ("$counter_value", vec!["counter_value"]),
+            ("The count is $counter_value", vec!["counter_value"]),
+            ("$counter_value items", vec!["counter_value"]),
+            ("Hello $name and $age", vec!["name", "age"]),
+            ("No variables here", vec![]),
+            ("$_private_var", vec!["_private_var"]),
+            ("$var123", vec!["var123"]),
+        ];
+        
+        for (input, expected) in test_cases {
+            let result = extract_template_variables(input);
+            assert_eq!(result, expected, "Failed for input: '{}'", input);
+        }
+    }
+    
+    #[test]
+    fn test_template_binding_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let input_path = temp_dir.path().join("test_template.kry");
+        let output_path = temp_dir.path().join("test_template.krb");
+        
+        // Create a test file with template variables
+        let test_content = r#"@variables {
+    counter_value: 0
+}
+
+App {
+    Text {
+        id: "counter_display"
+        text: "$counter_value"
+    }
+}"#;
+        
+        fs::write(&input_path, test_content).unwrap();
+        
+        let mut options = CompilerOptions::default();
+        options.debug_mode = true;
+        
+        let stats = compile_file_with_options(
+            input_path.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+            options
+        ).unwrap();
+        
+        // Check that the file was created
+        assert!(output_path.exists());
+        
+        // Read the KRB file and check for template variables
+        let krb_data = fs::read(&output_path).unwrap();
+        
+        // Should have template variables and bindings
+        assert!(stats.variable_count > 0, "No template variables found");
+        println!("Template variables found: {}", stats.variable_count);
+        
+        // Check the KRB header for template variable flags
+        let header_flags = u16::from_le_bytes([krb_data[12], krb_data[13]]);
+        assert!(header_flags & FLAG_HAS_TEMPLATE_VARIABLES != 0, 
+               "KRB file missing template variable flag");
+        
+        // The binding should be created for the text property
+        // This is a basic test - more detailed verification would need KRB parsing
+        println!("KRB file size: {} bytes", krb_data.len());
+        println!("Header flags: 0x{:04x}", header_flags);
+    }
     
     #[test]
     fn test_compile_empty_file() {

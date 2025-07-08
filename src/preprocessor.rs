@@ -271,8 +271,8 @@ mod tests {
         let mut preprocessor = Preprocessor::new();
         let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
         
-        assert!(result.contains("Container { text: \"included\" }"));
-        assert!(result.contains("App { }"));
+        assert!(result.0.contains("Container { text: \"included\" }"));
+        assert!(result.0.contains("App { }"));
     }
 
     #[test]
@@ -295,8 +295,8 @@ App { }"#;
         let mut preprocessor = Preprocessor::new();
         let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
         
-        assert!(result.contains("Button { text: \"Click me\" }"));
-        assert!(result.contains("App { }"));
+        assert!(result.0.contains("Button { text: \"Click me\" }"));
+        assert!(result.0.contains("App { }"));
     }
 
     #[test]
@@ -327,10 +327,10 @@ App { }"#;
         let mut preprocessor = Preprocessor::new();
         let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
         
-        assert!(result.contains("level3"));
-        assert!(result.contains("level2"));
-        assert!(result.contains("level1"));
-        assert!(result.contains("App { }"));
+        assert!(result.0.contains("level3"));
+        assert!(result.0.contains("level2"));
+        assert!(result.0.contains("level1"));
+        assert!(result.0.contains("App { }"));
     }
 
     #[test]
@@ -404,8 +404,8 @@ App { }"#;
         let mut preprocessor = Preprocessor::new();
         let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
         
-        assert!(result.contains("Text { text: \"test\" }"));
-        assert!(result.contains("App { }"));
+        assert!(result.0.contains("Text { text: \"test\" }"));
+        assert!(result.0.contains("App { }"));
     }
 
     #[test]

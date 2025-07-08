@@ -740,6 +740,12 @@ impl Parser {
                 
                 Ok(value_parts.join(" "))
             }
+            TokenType::TemplateVariable(var) => {
+                // Handle template variables like $counter_value
+                let value = format!("${}", var);
+                self.advance();
+                Ok(value)
+            }
             TokenType::Dollar => {
                 // Parse variable expressions like $var or $var == 0
                 let mut expression_parts = vec!["$".to_string()];
@@ -927,9 +933,9 @@ impl Parser {
     }
     
     /// Extract template variables from a string value
-    /// Finds patterns like {{variable_name}} and returns a list of variable names
+    /// Finds patterns like $variable_name and returns a list of variable names
     fn extract_template_variables(&self, value: &str) -> Vec<String> {
-        let re = Regex::new(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap();
+        let re = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
         let mut variables = Vec::new();
         
         for capture in re.captures_iter(value) {
@@ -1123,11 +1129,11 @@ mod tests {
         let parser = Parser::new(Vec::new());
         
         // Test simple template variable
-        let vars = parser.extract_template_variables("Count: {{counter_value}}");
+        let vars = parser.extract_template_variables("Count: $counter_value");
         assert_eq!(vars, vec!["counter_value"]);
         
         // Test multiple template variables
-        let vars = parser.extract_template_variables("Hello {{user_name}}, count: {{counter_value}}");
+        let vars = parser.extract_template_variables("Hello $user_name, count: $counter_value");
         assert_eq!(vars, vec!["user_name", "counter_value"]);
         
         // Test no template variables
@@ -1135,7 +1141,7 @@ mod tests {
         assert!(vars.is_empty());
         
         // Test duplicate variables (should only appear once)
-        let vars = parser.extract_template_variables("{{var}} and {{var}} again");
+        let vars = parser.extract_template_variables("$var and $var again");
         assert_eq!(vars, vec!["var"]);
     }
 }

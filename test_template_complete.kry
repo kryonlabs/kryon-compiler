@@ -3,7 +3,7 @@ App {
     window_title: "Template Test"
     
     Text display {
-        text: "Value: {{test_var}}"
+        text: "Value: $test_var"
     }
     
     Button set_button {

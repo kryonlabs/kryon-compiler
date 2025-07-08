@@ -5,6 +5,7 @@ use crate::error::{CompilerError, Result};
 use crate::types::*;
 use crate::variable_context::{VariableContext, VariableScope};
 use std::collections::HashMap;
+use regex;
 
 pub struct ComponentResolver {
     instantiation_stack: Vec<String>, // Track instantiation to detect recursion
@@ -15,6 +16,32 @@ impl ComponentResolver {
         Self {
             instantiation_stack: Vec::new(),
         }
+    }
+    
+    /// Substitute variables in a string using the provided mapping
+    pub fn substitute_variables(&self, input: &str, mapping: &HashMap<String, String>) -> Result<String> {
+        let mut result = input.to_string();
+        
+        // Use regex to find $variable patterns
+        let re = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+        
+        for capture in re.captures_iter(input) {
+            if let Some(var_name) = capture.get(1) {
+                let var_name_str = var_name.as_str();
+                if let Some(value) = mapping.get(var_name_str) {
+                    let pattern = format!("${}", var_name_str);
+                    result = result.replace(&pattern, value);
+                } else {
+                    return Err(CompilerError::Variable {
+                        file: "test".to_string(),
+                        line: 0,
+                        message: format!("Undefined variable: ${}", var_name_str),
+                    });
+                }
+            }
+        }
+        
+        Ok(result)
     }
     
     pub fn resolve_components(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {

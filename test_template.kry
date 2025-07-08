@@ -7,7 +7,7 @@ App {
     window_height: 300
     
     Text {
-        text: "Count: {{counter_value}}"
+        text: "Count: $counter_value"
         id: "display"
     }
 }

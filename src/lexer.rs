@@ -47,10 +47,6 @@ pub enum TokenType {
     Dollar,       // $
     Dot,          // .
     
-    // Template variables
-    DoubleLeftBrace,  // {{
-    DoubleRightBrace, // }}
-    
     // Pseudo-selector
     PseudoSelector(String), // &:hover, &:active, etc.
     
@@ -117,8 +113,6 @@ impl fmt::Display for TokenType {
             TokenType::Ampersand => write!(f, "&"),
             TokenType::Dollar => write!(f, "$"),
             TokenType::Dot => write!(f, "."),
-            TokenType::DoubleLeftBrace => write!(f, "{{{{"),
-            TokenType::DoubleRightBrace => write!(f, "}}}}"),
             TokenType::PseudoSelector(state) => write!(f, "pseudo-selector({})", state),
             TokenType::String(s) => write!(f, "string(\"{}\")", s),
             TokenType::Number(n) => write!(f, "number({})", n),
@@ -320,24 +314,8 @@ impl Lexer {
                 self.column = 1;
                 TokenType::Newline
             }
-            '{' => {
-                // Check for double left brace {{
-                if self.peek() == Some('{') {
-                    self.advance(); // consume the second {
-                    TokenType::DoubleLeftBrace
-                } else {
-                    TokenType::LeftBrace
-                }
-            }
-            '}' => {
-                // Check for double right brace }}
-                if self.peek() == Some('}') {
-                    self.advance(); // consume the second }
-                    TokenType::DoubleRightBrace
-                } else {
-                    TokenType::RightBrace
-                }
-            }
+            '{' => TokenType::LeftBrace,
+            '}' => TokenType::RightBrace,
             '[' => TokenType::LeftBracket,
             ']' => TokenType::RightBracket,
             '(' => TokenType::LeftParen,
@@ -346,7 +324,15 @@ impl Lexer {
             ';' => TokenType::Semicolon,
             ',' => TokenType::Comma,
             '=' => TokenType::Equals,
-            '$' => TokenType::Dollar,
+            '$' => {
+                // Check if this is a variable reference like $variable_name
+                if self.peek().map_or(false, |c| c.is_alphabetic() || c == '_') {
+                    let variable_name = self.read_identifier_after_dollar()?;
+                    TokenType::TemplateVariable(variable_name)
+                } else {
+                    TokenType::Dollar
+                }
+            }
             '.' => {
                 // Check if this is part of a number (e.g., .5) or standalone dot
                 if self.peek().map_or(false, |c| c.is_ascii_digit()) {
@@ -672,6 +658,34 @@ impl Lexer {
         let mut identifier = String::new();
         identifier.push(first_char);
         
+        while let Some(ch) = self.peek() {
+            if ch.is_alphanumeric() || ch == '_' {
+                identifier.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        Ok(identifier)
+    }
+    
+    fn read_identifier_after_dollar(&mut self) -> Result<String> {
+        let mut identifier = String::new();
+        
+        // First character must be alphabetic or underscore
+        if let Some(ch) = self.peek() {
+            if ch.is_alphabetic() || ch == '_' {
+                identifier.push(ch);
+                self.advance();
+            } else {
+                return Err(self.parse_error(
+                    format!("Invalid variable name: ${}", ch)
+                ));
+            }
+        }
+        
+        // Read the rest of the identifier
         while let Some(ch) = self.peek() {
             if ch.is_alphanumeric() || ch == '_' {
                 identifier.push(ch);

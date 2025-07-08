@@ -273,21 +273,27 @@ impl VariableProcessor {
 
                 let var_name = &caps[1];
                 
-                match state.variables.get(var_name) {
-                    Some(var_def) if var_def.is_resolved => var_def.value.clone(),
-                    Some(_) => {
-                        substitution_errors.push(format!(
-                            "Line {}: Internal error: variable '{}' used but not resolved",
-                            line_num, var_name
-                        ));
-                        caps[0].to_string() // Return original if error
-                    }
-                    None => {
-                        substitution_errors.push(format!(
-                            "Line {}: Undefined variable '${}'",
-                            line_num, var_name
-                        ));
-                        caps[0].to_string() // Return original if error
+                // Check if this is a template variable that should be preserved for runtime binding
+                if self.is_template_variable_context(line, var_name) {
+                    // Preserve template variables in element properties for runtime binding
+                    caps[0].to_string() // Return original $variable_name
+                } else {
+                    match state.variables.get(var_name) {
+                        Some(var_def) if var_def.is_resolved => var_def.value.clone(),
+                        Some(_) => {
+                            substitution_errors.push(format!(
+                                "Line {}: Internal error: variable '{}' used but not resolved",
+                                line_num, var_name
+                            ));
+                            caps[0].to_string() // Return original if error
+                        }
+                        None => {
+                            substitution_errors.push(format!(
+                                "Line {}: Undefined variable '${}'",
+                                line_num, var_name
+                            ));
+                            caps[0].to_string() // Return original if error
+                        }
                     }
                 }
             });
@@ -382,6 +388,28 @@ impl VariableProcessor {
         } else {
             line
         }
+    }
+    
+    /// Check if a variable usage is in a template context that should be preserved for runtime binding
+    fn is_template_variable_context(&self, line: &str, _var_name: &str) -> bool {
+        // Preserve template variables in element properties that should be runtime-bound
+        // Look for patterns like 'text: $variable' or 'text: "something $variable"'
+        if line.trim().starts_with("text:") {
+            return true;
+        }
+        
+        // Check for other element properties that should support template variables
+        let template_properties = [
+            "text:", "value:", "placeholder:", "title:", "label:", "content:"
+        ];
+        
+        for prop in &template_properties {
+            if line.trim().starts_with(prop) {
+                return true;
+            }
+        }
+        
+        false
     }
 }
 
