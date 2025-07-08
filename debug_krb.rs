@@ -13,7 +13,7 @@ fn main() {
     let filename = &args[1];
     let data = fs::read(filename).expect("Failed to read KRB file");
     
-    if data.len() < 54 {
+    if data.len() < 66 {
         eprintln!("File too small for valid KRB");
         std::process::exit(1);
     }
@@ -31,6 +31,8 @@ fn main() {
     let script_count = cursor.read_u16::<LittleEndian>().unwrap();
     let string_count = cursor.read_u16::<LittleEndian>().unwrap();
     let resource_count = cursor.read_u16::<LittleEndian>().unwrap();
+    let template_variable_count = cursor.read_u16::<LittleEndian>().unwrap();
+    let template_binding_count = cursor.read_u16::<LittleEndian>().unwrap();
     
     let element_offset = cursor.read_u32::<LittleEndian>().unwrap();
     let style_offset = cursor.read_u32::<LittleEndian>().unwrap();
@@ -39,6 +41,8 @@ fn main() {
     let script_offset = cursor.read_u32::<LittleEndian>().unwrap();
     let string_offset = cursor.read_u32::<LittleEndian>().unwrap();
     let resource_offset = cursor.read_u32::<LittleEndian>().unwrap();
+    let template_variable_offset = cursor.read_u32::<LittleEndian>().unwrap();
+    let template_binding_offset = cursor.read_u32::<LittleEndian>().unwrap();
     let total_size = cursor.read_u32::<LittleEndian>().unwrap();
     
     println!("KRB File Analysis:");
@@ -48,6 +52,8 @@ fn main() {
     println!("  Scripts: {}", script_count);
     println!("  Strings: {}", string_count);
     println!("  Resources: {}", resource_count);
+    println!("  Template Variables: {}", template_variable_count);
+    println!("  Template Bindings: {}", template_binding_count);
     println!("  Element offset: {}", element_offset);
     println!("  String offset: {}", string_offset);
     println!("  Total size: {}", total_size);
