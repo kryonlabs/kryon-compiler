@@ -368,7 +368,7 @@ fn compile_ast_with_state(
     }
     
     let mut semantic_analyzer = SemanticAnalyzer::new();
-    semantic_analyzer.analyze(&ast, state)?;
+    semantic_analyzer.analyze(&mut ast, state)?;
     
     if options.debug_mode {
         log::debug!("Phase 1.2 complete. Semantic analysis passed");
@@ -742,7 +742,7 @@ pub fn compile_source_with_options(
     }
     
     let mut semantic_analyzer = SemanticAnalyzer::new();
-    semantic_analyzer.analyze(&ast, &mut state)?;
+    semantic_analyzer.analyze(&mut ast, &mut state)?;
     
     if options.debug_mode {
         log::debug!("Phase 1.2 complete. Semantic analysis passed");

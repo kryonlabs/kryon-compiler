@@ -20,7 +20,7 @@ impl SemanticAnalyzer {
         }
     }
     
-    pub fn analyze(&mut self, ast: &AstNode, state: &mut CompilerState) -> Result<()> {
+    pub fn analyze(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {
         // Phase 1: Collect all definitions
         self.collect_definitions(ast, state)?;
         
@@ -279,7 +279,7 @@ impl SemanticAnalyzer {
         Ok(())
     }
     
-    fn validate_elements(&mut self, ast: &AstNode, state: &CompilerState) -> Result<()> {
+    fn validate_elements(&mut self, ast: &mut AstNode, state: &CompilerState) -> Result<()> {
         match ast {
             AstNode::File { app, components, .. } => {
                 // Validate main app
@@ -302,7 +302,7 @@ impl SemanticAnalyzer {
     
     fn validate_element_recursive(
         &mut self,
-        ast: &AstNode,
+        ast: &mut AstNode,
         state: &CompilerState,
         parent_type: Option<&str>
     ) -> Result<()> {
@@ -329,22 +329,35 @@ impl SemanticAnalyzer {
         Ok(())
     }
     
-    fn validate_property(&mut self, element_type: &str, prop: &AstProperty, _state: &CompilerState) -> Result<()> {
-        // Validate property is valid for this element type
+    fn validate_property(&mut self, element_type: &str, prop: &mut AstProperty, _state: &CompilerState) -> Result<()> {
+        // Resolve property aliases first
+        let resolved_key = self.resolve_property_alias(element_type, &prop.key);
+        
+        // If we resolved an alias, show a helpful message and update the property key
+        if resolved_key != prop.key {
+            self.warnings.push(format!(
+                "Line {}: Property '{}' on {} element is automatically mapped to '{}' (consider updating your code)",
+                prop.line, prop.key, element_type, resolved_key
+            ));
+            // Update the property key to use the canonical name
+            prop.key = resolved_key.clone();
+        }
+        
+        // Validate property is valid for this element type (using resolved key)
         let is_valid = match element_type {
-            "App" => self.is_valid_app_property(&prop.key),
-            "Text" => self.is_valid_text_property(&prop.key),
-            "Button" => self.is_valid_button_property(&prop.key),
-            "Input" => self.is_valid_input_property(&prop.key),
-            "Image" => self.is_valid_image_property(&prop.key),
-            "Container" => self.is_valid_container_property(&prop.key),
+            "App" => self.is_valid_app_property(&resolved_key),
+            "Text" => self.is_valid_text_property(&resolved_key),
+            "Button" => self.is_valid_button_property(&resolved_key),
+            "Input" => self.is_valid_input_property(&resolved_key),
+            "Image" => self.is_valid_image_property(&resolved_key),
+            "Container" => self.is_valid_container_property(&resolved_key),
             _ => true, // Unknown element types accept any property
         };
         
         if !is_valid {
             return Err(CompilerError::semantic_legacy(
                 prop.line,
-                format!("Property '{}' is not valid for element type '{}'", prop.key, element_type)
+                format!("Property '{}' is not valid for element type '{}'", resolved_key, element_type)
             ));
         }
         
@@ -640,6 +653,55 @@ impl SemanticAnalyzer {
         )
     }
     
+    /// Resolve property aliases to canonical property names
+    fn resolve_property_alias(&self, element_type: &str, property: &str) -> String {
+        match (element_type, property) {
+            // Text element aliases
+            ("Text", "color") => "text_color".to_string(),
+            ("Text", "font") => "font_family".to_string(),
+            ("Text", "size") => "font_size".to_string(),
+            ("Text", "align") => "text_alignment".to_string(),
+            
+            // Button element aliases (inherits from Text)
+            ("Button", "color") => "text_color".to_string(),
+            ("Button", "font") => "font_family".to_string(),
+            ("Button", "size") => "font_size".to_string(),
+            ("Button", "align") => "text_alignment".to_string(),
+            
+            // Container element aliases
+            ("Container", "x") => "pos_x".to_string(),
+            ("Container", "y") => "pos_y".to_string(),
+            ("Container", "bg") => "background_color".to_string(),
+            ("Container", "bg_color") => "background_color".to_string(),
+            ("Container", "border") => "border_width".to_string(),
+            
+            // Image element aliases
+            ("Image", "x") => "pos_x".to_string(),
+            ("Image", "y") => "pos_y".to_string(),
+            ("Image", "src") => "source".to_string(),
+            ("Image", "url") => "source".to_string(),
+            
+            // App element aliases  
+            ("App", "title") => "window_title".to_string(),
+            ("App", "w") => "window_width".to_string(),
+            ("App", "h") => "window_height".to_string(),
+            
+            // Universal aliases for all elements
+            (_, "x") => "pos_x".to_string(),
+            (_, "y") => "pos_y".to_string(),
+            (_, "w") => "width".to_string(),
+            (_, "h") => "height".to_string(),
+            (_, "bg") => "background_color".to_string(),
+            (_, "bg_color") => "background_color".to_string(),
+            (_, "border") => "border_width".to_string(),
+            (_, "opacity") => "opacity".to_string(),
+            (_, "visible") => "visibility".to_string(),
+            
+            // No alias found, return original property
+            _ => property.to_string(),
+        }
+    }
+    
     fn add_string_to_state(&self, text: &str, state: &mut CompilerState) -> Result<u8> {
         // Check if string already exists
         for (i, entry) in state.strings.iter().enumerate() {
@@ -742,11 +804,17 @@ mod tests {
         let state = CompilerState::new();
         
         // Valid property
-        let valid_prop = AstProperty::new("text".to_string(), "\"Hello\"".to_string(), 1);
-        assert!(analyzer.validate_property("Text", &valid_prop, &state).is_ok());
+        let mut valid_prop = AstProperty::new("text".to_string(), PropertyValue::String("\"Hello\"".to_string()), 1);
+        assert!(analyzer.validate_property("Text", &mut valid_prop, &state).is_ok());
         
         // Invalid property for element type
-        let invalid_prop = AstProperty::new("onChange".to_string(), "handler".to_string(), 2);
-        assert!(analyzer.validate_property("Text", &invalid_prop, &state).is_err());
+        let mut invalid_prop = AstProperty::new("onChange".to_string(), PropertyValue::String("handler".to_string()), 2);
+        assert!(analyzer.validate_property("Text", &mut invalid_prop, &state).is_err());
+        
+        // Test alias resolution
+        let mut alias_prop = AstProperty::new("color".to_string(), PropertyValue::String("\"#FF0000\"".to_string()), 3);
+        assert!(analyzer.validate_property("Text", &mut alias_prop, &state).is_ok());
+        assert_eq!(alias_prop.key, "text_color"); // Should be resolved to canonical name
+        assert_eq!(analyzer.warnings.len(), 1); // Should have generated a warning
     }
 }
