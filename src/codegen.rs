@@ -48,6 +48,7 @@ impl CodeGenerator {
         self.output.write_u16::<LittleEndian>(state.resources.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.template_variables.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.template_bindings.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.transforms.len() as u16)?;
         
         // Section offsets (now correct)
         self.output.write_u32::<LittleEndian>(state.element_offset)?;
@@ -59,6 +60,7 @@ impl CodeGenerator {
         self.output.write_u32::<LittleEndian>(state.resource_offset)?;
         self.output.write_u32::<LittleEndian>(state.template_variable_offset)?;
         self.output.write_u32::<LittleEndian>(state.template_binding_offset)?;
+        self.output.write_u32::<LittleEndian>(state.transform_offset)?;
         
         // Total size
         self.output.write_u32::<LittleEndian>(state.total_size)?;
@@ -104,6 +106,9 @@ impl CodeGenerator {
         // Section: Template Bindings
         self.write_template_binding_table(state)?;
         
+        // Section: Transform Data
+        self.write_transform_table(state)?;
+        
         // 4. Final validation (optional but good practice)
         if self.output.len() != state.total_size as usize {
             return Err(CompilerError::CodeGen {
@@ -144,9 +149,10 @@ impl CodeGenerator {
         self.output.write_u16::<LittleEndian>(state.resources.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.template_variables.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.template_bindings.len() as u16)?;
+        self.output.write_u16::<LittleEndian>(state.transforms.len() as u16)?;
         
         // Section offsets (placeholders - will be updated later)
-        for _ in 0..9 {
+        for _ in 0..10 {
             self.output.write_u32::<LittleEndian>(0)?;
         }
         
@@ -399,6 +405,24 @@ impl CodeGenerator {
         Ok(())
     }
     
+    fn write_transform_table(&mut self, state: &CompilerState) -> Result<()> {
+        for transform in &state.transforms {
+            // Transform header
+            self.output.push(transform.transform_type as u8);
+            self.output.push(transform.properties.len() as u8);
+            
+            // Write transform properties
+            for prop in &transform.properties {
+                self.output.push(prop.property_type as u8);
+                self.output.push(prop.value_type as u8);
+                self.output.push(prop.value.len() as u8);
+                self.output.extend_from_slice(&prop.value);
+            }
+        }
+        
+        Ok(())
+    }
+    
     fn update_header_offsets(
         &mut self,
         element_offset: u32,
@@ -410,12 +434,13 @@ impl CodeGenerator {
         resource_offset: u32,
         template_variable_offset: u32,
         template_binding_offset: u32,
+        transform_offset: u32,
         total_size: u32,
     ) -> Result<()> {
         let mut cursor = Cursor::new(&mut self.output);
         
-        // Skip to offset section (magic + version + flags + counts = 26 bytes)
-        cursor.set_position(26);
+        // Skip to offset section (magic + version + flags + counts = 30 bytes)
+        cursor.set_position(30);
         
         // Write offsets in correct order per spec
         cursor.write_u32::<LittleEndian>(element_offset)?;
@@ -427,6 +452,7 @@ impl CodeGenerator {
         cursor.write_u32::<LittleEndian>(resource_offset)?;
         cursor.write_u32::<LittleEndian>(template_variable_offset)?;
         cursor.write_u32::<LittleEndian>(template_binding_offset)?;
+        cursor.write_u32::<LittleEndian>(transform_offset)?;
         cursor.write_u32::<LittleEndian>(total_size)?;
         
         Ok(())

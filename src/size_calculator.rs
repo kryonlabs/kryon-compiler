@@ -32,6 +32,9 @@ impl SizeCalculator {
         // Calculate template variable sizes
         self.calculate_template_variable_sizes(state);
         
+        // Calculate transform data sizes
+        self.calculate_transform_sizes(state);
+        
         // Calculate section offsets
         self.calculate_section_offsets(state);
         
@@ -183,6 +186,25 @@ impl SizeCalculator {
         }
         state.total_template_binding_size = template_binding_size;
     }
+    
+    fn calculate_transform_sizes(&self, state: &mut CompilerState) {
+        let mut total_size = 0u32;
+        
+        for transform in &state.transforms {
+            // Each transform: transform_type (1) + property_count (1) = 2 bytes
+            let mut transform_size = 2u32;
+            
+            // Add property sizes
+            for prop in &transform.properties {
+                // Each property: property_type (1) + value_type (1) + size (1) + data
+                transform_size += 3 + prop.value.len() as u32;
+            }
+            
+            total_size += transform_size;
+        }
+        
+        state.total_transform_size = total_size;
+    }
         
     pub fn calculate_section_offsets(&self, state: &mut CompilerState) {
         let mut current_offset = KRB_HEADER_SIZE as u32;
@@ -227,7 +249,11 @@ impl SizeCalculator {
         state.template_binding_offset = current_offset;
         current_offset += state.total_template_binding_size;
         
-        // 10. Total file size
+        // 10. Transform Data
+        state.transform_offset = current_offset;
+        current_offset += state.total_transform_size;
+        
+        // 11. Total file size
         state.total_size = current_offset;
     }
     /// Validate that all sizes are within limits
@@ -326,12 +352,18 @@ impl SizeCalculator {
             component_def_size: state.total_component_def_data_size,
             script_table_size: state.total_script_data_size,
             resource_table_size: state.total_resource_table_size,
+            template_variable_size: state.total_template_variable_size,
+            template_binding_size: state.total_template_binding_size,
+            transform_size: state.total_transform_size,
             element_count: state.elements.len(),
             string_count: state.strings.len(),
             style_count: state.styles.len(),
             component_count: state.component_defs.len(),
             script_count: state.scripts.len(),
             resource_count: state.resources.len(),
+            template_variable_count: state.template_variables.len(),
+            template_binding_count: state.template_bindings.len(),
+            transform_count: state.transforms.len(),
         }
     }
 }
@@ -346,12 +378,18 @@ pub struct SizeStatistics {
     pub component_def_size: u32,
     pub script_table_size: u32,
     pub resource_table_size: u32,
+    pub template_variable_size: u32,
+    pub template_binding_size: u32,
+    pub transform_size: u32,
     pub element_count: usize,
     pub string_count: usize,
     pub style_count: usize,
     pub component_count: usize,
     pub script_count: usize,
     pub resource_count: usize,
+    pub template_variable_count: usize,
+    pub template_binding_count: usize,
+    pub transform_count: usize,
 }
 
 impl SizeStatistics {
@@ -379,6 +417,15 @@ impl SizeStatistics {
         println!("  Resource table: {} bytes ({:.1}%)", 
                 self.resource_table_size,
                 self.resource_table_size as f64 / self.total_size as f64 * 100.0);
+        println!("  Template variables: {} bytes ({:.1}%)", 
+                self.template_variable_size,
+                self.template_variable_size as f64 / self.total_size as f64 * 100.0);
+        println!("  Template bindings: {} bytes ({:.1}%)", 
+                self.template_binding_size,
+                self.template_binding_size as f64 / self.total_size as f64 * 100.0);
+        println!("  Transform data: {} bytes ({:.1}%)", 
+                self.transform_size,
+                self.transform_size as f64 / self.total_size as f64 * 100.0);
         
         println!("\nCounts:");
         println!("  Elements: {}", self.element_count);
@@ -387,6 +434,9 @@ impl SizeStatistics {
         println!("  Components: {}", self.component_count);
         println!("  Scripts: {}", self.script_count);
         println!("  Resources: {}", self.resource_count);
+        println!("  Template variables: {}", self.template_variable_count);
+        println!("  Template bindings: {}", self.template_binding_count);
+        println!("  Transforms: {}", self.transform_count);
     }
     
     pub fn compression_ratio(&self, original_size: u64) -> f64 {

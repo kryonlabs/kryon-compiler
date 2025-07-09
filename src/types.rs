@@ -8,7 +8,7 @@ use crate::ast::AstNode;
 pub const KRB_MAGIC: &[u8; 4] = b"KRB1";
 pub const KRB_VERSION_MAJOR: u8 = 0;
 pub const KRB_VERSION_MINOR: u8 = 5;
-pub const KRB_HEADER_SIZE: usize = 66;
+pub const KRB_HEADER_SIZE: usize = 72;
 pub const KRB_ELEMENT_HEADER_SIZE: usize = 19;
 
 // Header Flags
@@ -23,6 +23,7 @@ pub const FLAG_HAS_APP: u16 = 1 << 7;
 pub const FLAG_HAS_SCRIPTS: u16 = 1 << 8;
 pub const FLAG_HAS_STATE_PROPERTIES: u16 = 1 << 9;
 pub const FLAG_HAS_TEMPLATE_VARIABLES: u16 = 1 << 10;
+pub const FLAG_HAS_TRANSFORMS: u16 = 1 << 11;
 
 // Element Types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +282,13 @@ pub enum ValueType {
     PositionValue = 0x14,    // Position enum (relative, absolute, etc.)
     LengthPercentage = 0x15, // CSS length-percentage values
     Dimension = 0x16,        // Auto, Length, Percentage dimension
+    
+    // Transform-specific value types
+    Transform = 0x17,        // Transform object with multiple properties
+    TransformMatrix = 0x18,  // 4x4 or 2x3 transformation matrix
+    CSSUnit = 0x19,          // CSS unit values (px, em, rem, vw, vh, deg, rad, turn)
+    Transform2D = 0x1A,      // Optimized 2D transform (scale, translate, rotate)
+    Transform3D = 0x1B,      // Full 3D transform data
 }
 
 // Layout flags (must match renderer's LayoutDirection enum)
@@ -356,6 +364,122 @@ pub enum ResourceType {
 pub enum ResourceFormat {
     External = 0x00,
     Inline = 0x01,
+}
+
+// Transform data structures
+#[derive(Debug, Clone)]
+pub struct TransformData {
+    pub transform_type: TransformType,
+    pub properties: Vec<TransformProperty>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TransformType {
+    Transform2D = 0x01,      // Basic 2D transform
+    Transform3D = 0x02,      // Full 3D transform
+    Matrix2D = 0x03,         // 2x3 matrix
+    Matrix3D = 0x04,         // 4x4 matrix
+}
+
+#[derive(Debug, Clone)]
+pub struct TransformProperty {
+    pub property_type: TransformPropertyType,
+    pub value_type: ValueType,
+    pub value: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TransformPropertyType {
+    // 2D Transform properties
+    Scale = 0x01,
+    ScaleX = 0x02,
+    ScaleY = 0x03,
+    TranslateX = 0x04,
+    TranslateY = 0x05,
+    Rotate = 0x06,
+    SkewX = 0x07,
+    SkewY = 0x08,
+    
+    // 3D Transform properties
+    ScaleZ = 0x09,
+    TranslateZ = 0x0A,
+    RotateX = 0x0B,
+    RotateY = 0x0C,
+    RotateZ = 0x0D,
+    Perspective = 0x0E,
+    
+    // Matrix properties
+    Matrix = 0x0F,
+}
+
+impl TransformPropertyType {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "scale" => Some(Self::Scale),
+            "scale_x" => Some(Self::ScaleX),
+            "scale_y" => Some(Self::ScaleY),
+            "translate_x" => Some(Self::TranslateX),
+            "translate_y" => Some(Self::TranslateY),
+            "rotate" => Some(Self::Rotate),
+            "skew_x" => Some(Self::SkewX),
+            "skew_y" => Some(Self::SkewY),
+            "scale_z" => Some(Self::ScaleZ),
+            "translate_z" => Some(Self::TranslateZ),
+            "rotate_x" => Some(Self::RotateX),
+            "rotate_y" => Some(Self::RotateY),
+            "rotate_z" => Some(Self::RotateZ),
+            "perspective" => Some(Self::Perspective),
+            "matrix" => Some(Self::Matrix),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CSSUnitValue {
+    pub value: f64,
+    pub unit: CSSUnit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CSSUnit {
+    // Size units
+    Pixels = 0x01,      // px
+    Em = 0x02,          // em
+    Rem = 0x03,         // rem
+    ViewportWidth = 0x04, // vw
+    ViewportHeight = 0x05, // vh
+    Percentage = 0x06,   // %
+    
+    // Angle units
+    Degrees = 0x07,     // deg
+    Radians = 0x08,     // rad
+    Turns = 0x09,       // turn
+    
+    // Unitless (for scale, matrix values)
+    Number = 0x0A,
+}
+
+impl CSSUnit {
+    pub fn from_property_value(value: &crate::ast::PropertyValue) -> Option<CSSUnitValue> {
+        match value {
+            crate::ast::PropertyValue::Pixels(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Pixels }),
+            crate::ast::PropertyValue::Em(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Em }),
+            crate::ast::PropertyValue::Rem(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Rem }),
+            crate::ast::PropertyValue::ViewportWidth(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::ViewportWidth }),
+            crate::ast::PropertyValue::ViewportHeight(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::ViewportHeight }),
+            crate::ast::PropertyValue::Percentage(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Percentage }),
+            crate::ast::PropertyValue::Degrees(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Degrees }),
+            crate::ast::PropertyValue::Radians(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Radians }),
+            crate::ast::PropertyValue::Turns(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Turns }),
+            crate::ast::PropertyValue::Number(v) => Some(CSSUnitValue { value: *v, unit: CSSUnit::Number }),
+            crate::ast::PropertyValue::Integer(v) => Some(CSSUnitValue { value: *v as f64, unit: CSSUnit::Number }),
+            _ => None,
+        }
+    }
 }
 
 // Compiler limits
@@ -598,6 +722,11 @@ pub struct CompilerState {
     pub template_binding_offset: u32,
     pub total_template_variable_size: u32,
     pub total_template_binding_size: u32,
+    
+    // Transform data
+    pub transforms: Vec<TransformData>,
+    pub transform_offset: u32,
+    pub total_transform_size: u32,
 }
 
 impl CompilerState {
@@ -636,6 +765,9 @@ impl CompilerState {
             template_binding_offset: 0,
             total_template_variable_size: 0,
             total_template_binding_size: 0,
+            transforms: Vec::new(),
+            transform_offset: 0,
+            total_transform_size: 0,
         }
     }
 }
