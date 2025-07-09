@@ -144,10 +144,15 @@ impl ComponentResolver {
             // Override with instance properties
             for instance_prop in properties {
                 // Strip quotes from string values for variable substitution
-                let clean_value = if instance_prop.value.starts_with('"') && instance_prop.value.ends_with('"') {
-                    instance_prop.value[1..instance_prop.value.len()-1].to_string()
-                } else {
-                    instance_prop.value.clone()
+                let clean_value = match &instance_prop.value {
+                    PropertyValue::String(s) => {
+                        if s.starts_with('"') && s.ends_with('"') {
+                            s[1..s.len()-1].to_string()
+                        } else {
+                            s.clone()
+                        }
+                    }
+                    _ => instance_prop.value.to_string(),
                 };
                 
                 state.variable_context.add_string_variable(
@@ -201,7 +206,7 @@ impl ComponentResolver {
         for source_prop in &element.source_properties {
             properties.push(AstProperty::new(
                 source_prop.key.clone(),
-                source_prop.value.clone(),
+                PropertyValue::String(source_prop.value.clone()),
                 source_prop.line_num,
             ));
         }
@@ -227,7 +232,9 @@ impl ComponentResolver {
             AstNode::Element { properties, children, .. } => {
                 // Replace variable references in properties using the variable context
                 for prop in properties {
-                    prop.value = state.variable_context.substitute_variables(&prop.value)?;
+                    let value_str = prop.value.to_string();
+                    let substituted = state.variable_context.substitute_variables(&value_str)?;
+                    prop.value = PropertyValue::String(substituted);
                 }
                 
                 // Recursively process children

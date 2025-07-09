@@ -1002,7 +1002,7 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
                             properties: krb_properties,
                             source_properties: properties.iter().map(|p| SourceProperty {
                                 key: p.key.clone(),
-                                value: p.value.clone(),
+                                value: p.value.to_string(),
                                 line_num: p.line,
                             }).collect(),
                             calculated_size: 0, // Will be calculated later
@@ -1083,7 +1083,7 @@ fn convert_element_to_state(
             // Always add to source properties for template processing
             element.source_properties.push(SourceProperty {
                 key: ast_prop.key.clone(),
-                value: ast_prop.value.clone(),
+                value: ast_prop.value.to_string(),
                 line_num: ast_prop.line,
             });
             

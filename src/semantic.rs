@@ -99,7 +99,7 @@ impl SemanticAnalyzer {
             for ast_prop in properties {
                 style_entry.source_properties.push(SourceProperty {
                     key: ast_prop.key.clone(),
-                    value: ast_prop.value.clone(),
+                    value: ast_prop.value.to_string(),
                     line_num: ast_prop.line,
                 });
             }
@@ -349,7 +349,7 @@ impl SemanticAnalyzer {
         }
         
         // Validate property value format
-        self.validate_property_value(&prop.key, &prop.value, prop.line)?;
+        self.validate_property_value(&prop.key, &prop.value.to_string(), prop.line)?;
         
         Ok(())
     }
@@ -365,16 +365,21 @@ impl SemanticAnalyzer {
                 }
             }
             key if key.contains("width") || key.contains("height") || key.contains("size") => {
-                // Allow numbers, percentages (ending with %), variables ($var), and strings ("value")
+                // Allow numbers, percentages, CSS units, variables, and strings
                 let is_valid = value.chars().all(|c| c.is_ascii_digit() || c == '.') || // Pure number (including decimals)
                               value.ends_with('%') || // Percentage values like 100%, 50.5%
+                              value.ends_with("px") || // Pixel units like 10px, 100px
+                              value.ends_with("em") || // Em units like 1.5em, 2em
+                              value.ends_with("rem") || // Rem units like 2rem, 1.5rem
+                              value.ends_with("vw") || // Viewport width units like 50vw
+                              value.ends_with("vh") || // Viewport height units like 100vh
                               value.starts_with('$') || // Variables
                               value.starts_with('"'); // Strings
                 
                 if !is_valid {
                     return Err(CompilerError::semantic_legacy(
                         line,
-                        format!("Size property '{}' must be a number, percentage (%), variable ($var), or string", key)
+                        format!("Size property '{}' must be a number, percentage (%), CSS unit (px/em/rem/vw/vh), variable ($var), or string", key)
                     ));
                 }
             }

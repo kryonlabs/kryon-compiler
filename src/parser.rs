@@ -154,7 +154,7 @@ impl Parser {
             self.consume(TokenType::Colon, "Expected ':' after variable name")?;
             
             let value = self.parse_value()?;
-            variables.insert(name, value);
+            variables.insert(name, value.to_string());
         }
         
         self.consume(TokenType::RightBrace, "Expected '}' after variables")?;
@@ -188,17 +188,17 @@ impl Parser {
                     "name" => {
                         self.advance();
                         self.consume(TokenType::Equals, "Expected '=' after name")?;
-                        name = Some(self.parse_value()?);
+                        name = Some(self.parse_value()?.to_string());
                     }
                     "mode" => {
                         self.advance();
                         self.consume(TokenType::Equals, "Expected '=' after mode")?;
-                        mode = Some(self.parse_value()?);
+                        mode = Some(self.parse_value()?.to_string());
                     }
                     "from" => {
                         self.advance();
                         let file_path = self.parse_value()?;
-                        source = Some(ScriptSource::External(file_path));
+                        source = Some(ScriptSource::External(file_path.to_string()));
                     }
                     _ => break,
                 }
@@ -433,30 +433,52 @@ impl Parser {
         })
     }
     
-    fn parse_extends_value(&self, value: &str) -> Result<Vec<String>> {
-        let trimmed = value.trim();
-        
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            // Array format: ["style1", "style2"]
-            let content = &trimmed[1..trimmed.len()-1];
-            let mut extends = Vec::new();
-            
-            for item in content.split(',') {
-                let item = item.trim();
-                if item.starts_with('"') && item.ends_with('"') {
-                    extends.push(item[1..item.len()-1].to_string());
-                } else if !item.is_empty() {
-                    extends.push(item.to_string());
+    fn parse_extends_value(&self, value: &PropertyValue) -> Result<Vec<String>> {
+        match value {
+            PropertyValue::Array(arr) => {
+                let mut extends = Vec::new();
+                for item in arr {
+                    match item {
+                        PropertyValue::String(s) => {
+                            // Remove quotes if present
+                            let cleaned = if s.starts_with('"') && s.ends_with('"') {
+                                s[1..s.len()-1].to_string()
+                            } else {
+                                s.clone()
+                            };
+                            extends.push(cleaned);
+                        }
+                        _ => extends.push(item.to_string()),
+                    }
+                }
+                Ok(extends)
+            }
+            PropertyValue::String(s) => {
+                let trimmed = s.trim();
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    // Array format: ["style1", "style2"]
+                    let content = &trimmed[1..trimmed.len()-1];
+                    let mut extends = Vec::new();
+                    
+                    for item in content.split(',') {
+                        let item = item.trim();
+                        if item.starts_with('"') && item.ends_with('"') {
+                            extends.push(item[1..item.len()-1].to_string());
+                        } else if !item.is_empty() {
+                            extends.push(item.to_string());
+                        }
+                    }
+                    
+                    Ok(extends)
+                } else if trimmed.starts_with('"') && trimmed.ends_with('"') {
+                    // Single quoted string
+                    Ok(vec![trimmed[1..trimmed.len()-1].to_string()])
+                } else {
+                    // Single unquoted string
+                    Ok(vec![trimmed.to_string()])
                 }
             }
-            
-            Ok(extends)
-        } else if trimmed.starts_with('"') && trimmed.ends_with('"') {
-            // Single quoted string
-            Ok(vec![trimmed[1..trimmed.len()-1].to_string()])
-        } else {
-            // Single unquoted string
-            Ok(vec![trimmed.to_string()])
+            _ => Ok(vec![value.to_string()]),
         }
     }
     
@@ -554,7 +576,7 @@ impl Parser {
             
             let mut default_value = None;
             if self.match_token(&TokenType::Equals) {
-                default_value = Some(self.parse_value()?);
+                default_value = Some(self.parse_value()?.to_string());
             }
             
             properties.push(ComponentProperty::new(
@@ -678,7 +700,7 @@ impl Parser {
         self.match_token(&TokenType::Semicolon);
         
         // Extract template variables from the value
-        let template_variables = self.extract_template_variables(&value);
+        let template_variables = value.extract_variables();
         
         if template_variables.is_empty() {
             Ok(AstProperty::new(key, value, self.previous().line))
@@ -687,130 +709,179 @@ impl Parser {
         }
     }
     
-    fn parse_value(&mut self) -> Result<String> {
+    fn parse_value(&mut self) -> Result<PropertyValue> {
         let result = match &self.peek().token_type {
             TokenType::String(s) => {
                 let value = format!("\"{}\"", s);
                 self.advance();
-                Ok(value)
+                Ok(PropertyValue::String(value))
             }
             TokenType::Number(n) => {
-                let value = n.to_string();
+                let value = *n;
                 self.advance();
-                Ok(value)
+                Ok(PropertyValue::Number(value))
             }
             TokenType::Integer(i) => {
-                let value = i.to_string();
+                let value = *i;
                 self.advance();
-                Ok(value)
+                Ok(PropertyValue::Integer(value))
+            }
+            TokenType::Pixels(p) => {
+                let value = *p;
+                self.advance();
+                Ok(PropertyValue::Pixels(value))
+            }
+            TokenType::Em(e) => {
+                let value = *e;
+                self.advance();
+                Ok(PropertyValue::Em(value))
+            }
+            TokenType::Rem(r) => {
+                let value = *r;
+                self.advance();
+                Ok(PropertyValue::Rem(value))
+            }
+            TokenType::ViewportWidth(vw) => {
+                let value = *vw;
+                self.advance();
+                Ok(PropertyValue::ViewportWidth(value))
+            }
+            TokenType::ViewportHeight(vh) => {
+                let value = *vh;
+                self.advance();
+                Ok(PropertyValue::ViewportHeight(value))
             }
             TokenType::Percentage(p) => {
-                let value = format!("{}%", p);
+                let value = *p;
                 self.advance();
-                Ok(value)
+                Ok(PropertyValue::Percentage(value))
+            }
+            TokenType::Degrees(d) => {
+                let value = *d;
+                self.advance();
+                Ok(PropertyValue::Degrees(value))
+            }
+            TokenType::Radians(r) => {
+                let value = *r;
+                self.advance();
+                Ok(PropertyValue::Radians(value))
+            }
+            TokenType::Turns(t) => {
+                let value = *t;
+                self.advance();
+                Ok(PropertyValue::Turns(value))
             }
             TokenType::Boolean(b) => {
-                let value = b.to_string();
+                let value = *b;
                 self.advance();
-                Ok(value)
+                Ok(PropertyValue::Boolean(value))
             }
             TokenType::Color(c) => {
                 let value = c.clone();
                 self.advance();
-                Ok(value)
-            }
-            TokenType::Identifier(id) => {
-                // Handle multiple identifiers separated by spaces (e.g., "column center")
-                let mut value_parts = vec![id.clone()];
-                self.advance();
-                
-                // Keep collecting identifiers until we hit a newline, semicolon, or closing brace
-                while !self.is_at_end() {
-                    match &self.peek().token_type {
-                        TokenType::Identifier(next_id) => {
-                            value_parts.push(next_id.clone());
-                            self.advance();
-                        }
-                        TokenType::Newline | TokenType::Semicolon | TokenType::RightBrace => {
-                            break;
-                        }
-                        _ => break,
-                    }
-                }
-                
-                Ok(value_parts.join(" "))
+                Ok(PropertyValue::Color(value))
             }
             TokenType::TemplateVariable(var) => {
-                // Handle template variables like $counter_value
-                let value = format!("${}", var);
+                let value = var.clone();
                 self.advance();
-                Ok(value)
+                Ok(PropertyValue::Variable(value))
             }
-            TokenType::Dollar => {
-                // Parse variable expressions like $var or $var == 0
-                let mut expression_parts = vec!["$".to_string()];
-                self.advance(); // Consume the '$'
-                
-                // Get the variable name
-                if let TokenType::Identifier(name) = &self.peek().token_type {
-                    expression_parts.push(name.clone());
-                    self.advance();
-                } else {
-                    return Err(CompilerError::parse_legacy(
-                        self.peek().line,
-                        "Expected variable name after '$'"
-                    ));
-                }
-                
-                // Check for operators and continue expression
-                while !self.is_at_end() {
-                    match &self.peek().token_type {
-                        TokenType::Equals => {
-                            self.advance(); // consume first =
-                            // Check for double equals
-                            if self.check(&TokenType::Equals) {
-                                expression_parts.push("==".to_string());
-                                self.advance(); // consume second =
-                            } else {
-                                expression_parts.push("=".to_string());
-                            }
-                        }
-                        TokenType::Integer(i) => {
-                            expression_parts.push(i.to_string());
-                            self.advance();
-                        }
-                        TokenType::Number(n) => {
-                            expression_parts.push(n.to_string());
-                            self.advance();
-                        }
-                        TokenType::Boolean(b) => {
-                            expression_parts.push(b.to_string());
-                            self.advance();
-                        }
-                        TokenType::String(s) => {
-                            expression_parts.push(format!("\"{}\"", s));
-                            self.advance();
-                        }
-                        TokenType::Identifier(id) => {
-                            expression_parts.push(id.clone());
-                            self.advance();
-                        }
-                        TokenType::Newline | TokenType::Semicolon | TokenType::RightBrace => {
-                            break;
-                        }
-                        _ => break,
-                    }
-                }
-                
-                Ok(expression_parts.join(" "))
+            TokenType::LeftBrace => {
+                // Parse object literal
+                self.parse_object_literal()
             }
-            _ => Err(CompilerError::parse_legacy(
-                self.peek().line,
-                format!("Expected a value, but found {}", self.peek().token_type)
-            )),
+            TokenType::LeftBracket => {
+                // Parse array literal
+                self.parse_array_literal()
+            }
+            TokenType::Identifier(id) => {
+                let value = id.clone();
+                self.advance();
+                Ok(PropertyValue::String(value))
+            }
+            _ => {
+                Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    format!("Expected a value, but found {}", self.peek().token_type)
+                ))
+            }
         };
-
         result
+    }
+    
+    /// Parse object literal: { key: value, key: value }
+    fn parse_object_literal(&mut self) -> Result<PropertyValue> {
+        self.consume(TokenType::LeftBrace, "Expected '{'")?;
+        let mut object = HashMap::new();
+        
+        // Skip newlines after opening brace
+        while self.match_token(&TokenType::Newline) {}
+        
+        // Parse key-value pairs
+        while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
+            // Skip newlines
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            
+            // Parse key
+            let key = match &self.peek().token_type {
+                TokenType::Identifier(id) => {
+                    let key = id.clone();
+                    self.advance();
+                    key
+                }
+                _ => return Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    "Expected property name in object"
+                )),
+            };
+            
+            self.consume(TokenType::Colon, "Expected ':' after object property name")?;
+            
+            // Parse value
+            let value = self.parse_value()?;
+            
+            object.insert(key, value);
+            
+            // Optional comma
+            self.match_token(&TokenType::Comma);
+            
+            // Skip newlines after comma
+            while self.match_token(&TokenType::Newline) {}
+        }
+        
+        self.consume(TokenType::RightBrace, "Expected '}'")?;
+        Ok(PropertyValue::Object(object))
+    }
+    
+    /// Parse array literal: [value, value, value]
+    fn parse_array_literal(&mut self) -> Result<PropertyValue> {
+        self.consume(TokenType::LeftBracket, "Expected '['")?;
+        let mut array = Vec::new();
+        
+        // Skip newlines after opening bracket
+        while self.match_token(&TokenType::Newline) {}
+        
+        // Parse values
+        while !self.check(&TokenType::RightBracket) && !self.is_at_end() {
+            // Skip newlines
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            
+            let value = self.parse_value()?;
+            array.push(value);
+            
+            // Optional comma
+            self.match_token(&TokenType::Comma);
+            
+            // Skip newlines after comma
+            while self.match_token(&TokenType::Newline) {}
+        }
+        
+        self.consume(TokenType::RightBracket, "Expected ']'")?;
+        Ok(PropertyValue::Array(array))
     }
     
     // Utility methods
@@ -920,9 +991,9 @@ impl Parser {
         let default_app = AstNode::Element {
             element_type: "App".to_string(),
             properties: vec![
-                AstProperty::new("window_title".to_string(), "\"Auto-generated App\"".to_string(), 1),
-                AstProperty::new("window_width".to_string(), "800".to_string(), 1),
-                AstProperty::new("window_height".to_string(), "600".to_string(), 1),
+                AstProperty::new("window_title".to_string(), PropertyValue::String("\"Auto-generated App\"".to_string()), 1),
+                AstProperty::new("window_width".to_string(), PropertyValue::Integer(800), 1),
+                AstProperty::new("window_height".to_string(), PropertyValue::Integer(600), 1),
             ],
             pseudo_selectors: Vec::new(),
             children: standalone_elements, // Wrap all standalone elements as children

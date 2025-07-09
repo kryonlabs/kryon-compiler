@@ -234,12 +234,12 @@ impl VariableContext {
         for instance_prop in instance_props {
             if component_props.iter().any(|p| p.name == instance_prop.key) {
                 // Substitute any variables in the instance property value
-                let substituted_value = self.substitute_variables(&instance_prop.value)?;
+                let substituted_value = self.substitute_variables(&instance_prop.value.to_string())?;
                 mapping.insert(instance_prop.key.clone(), substituted_value);
             } else {
                 // Allow unknown properties to pass through but warn
                 log::warn!("Component property '{}' not defined in component schema", instance_prop.key);
-                let substituted_value = self.substitute_variables(&instance_prop.value)?;
+                let substituted_value = self.substitute_variables(&instance_prop.value.to_string())?;
                 mapping.insert(instance_prop.key.clone(), substituted_value);
             }
         }

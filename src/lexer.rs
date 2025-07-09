@@ -61,6 +61,16 @@ pub enum TokenType {
     ScriptContent(String), // Raw script content inside @function or @script blocks
     TemplateVariable(String), // Variable name inside {{ }}
     
+    // Unit types for transform and CSS values
+    Pixels(f64),      // 10px
+    Em(f64),          // 1.5em
+    Rem(f64),         // 2rem
+    ViewportWidth(f64), // 50vw
+    ViewportHeight(f64), // 100vh
+    Degrees(f64),     // 45deg
+    Radians(f64),     // 1.57rad
+    Turns(f64),       // 0.25turn
+    
     // Special
     Newline,
     Comment(String),
@@ -123,6 +133,14 @@ impl fmt::Display for TokenType {
             TokenType::Identifier(id) => write!(f, "identifier({})", id),
             TokenType::ScriptContent(content) => write!(f, "script_content({})", content),
             TokenType::TemplateVariable(var) => write!(f, "template_variable({})", var),
+            TokenType::Pixels(p) => write!(f, "pixels({}px)", p),
+            TokenType::Em(e) => write!(f, "em({}em)", e),
+            TokenType::Rem(r) => write!(f, "rem({}rem)", r),
+            TokenType::ViewportWidth(vw) => write!(f, "viewport_width({}vw)", vw),
+            TokenType::ViewportHeight(vh) => write!(f, "viewport_height({}vh)", vh),
+            TokenType::Degrees(d) => write!(f, "degrees({}deg)", d),
+            TokenType::Radians(r) => write!(f, "radians({}rad)", r),
+            TokenType::Turns(t) => write!(f, "turns({}turn)", t),
             TokenType::Newline => write!(f, "newline"),
             TokenType::Comment(c) => write!(f, "comment({})", c),
             TokenType::Eof => write!(f, "EOF"),
@@ -338,19 +356,7 @@ impl Lexer {
                 if self.peek().map_or(false, |c| c.is_ascii_digit()) {
                     // This is a decimal number starting with .
                     let number_str = self.read_number(ch)?;
-                    
-                    // Check if this is followed by a percentage sign
-                    if self.peek() == Some('%') {
-                        self.advance(); // consume the '%'
-                        let value = number_str.parse::<f64>().map_err(|_| {
-                            self.parse_error(format!("Invalid percentage number: {}", number_str))
-                        })?;
-                        TokenType::Percentage(value)
-                    } else {
-                        TokenType::Number(number_str.parse().map_err(|_| {
-                            self.parse_error(format!("Invalid number: {}", number_str))
-                        })?)
-                    }
+                    self.parse_number_with_unit(number_str)?
                 } else {
                     TokenType::Dot
                 }
@@ -419,23 +425,7 @@ impl Lexer {
             }
             ch if ch.is_ascii_digit() || (ch == '-' && self.peek().map_or(false, |c| c.is_ascii_digit())) => {
                 let number_str = self.read_number(ch)?;
-                
-                // Check if this is followed by a percentage sign
-                if self.peek() == Some('%') {
-                    self.advance(); // consume the '%'
-                    let value = number_str.parse::<f64>().map_err(|_| {
-                        self.parse_error(format!("Invalid percentage number: {}", number_str))
-                    })?;
-                    TokenType::Percentage(value)
-                } else if number_str.contains('.') {
-                    TokenType::Number(number_str.parse().map_err(|_| {
-                        self.parse_error(format!("Invalid number: {}", number_str))
-                    })?)
-                } else {
-                    TokenType::Integer(number_str.parse().map_err(|_| {
-                        self.parse_error(format!("Invalid integer: {}", number_str))
-                    })?)
-                }
+                self.parse_number_with_unit(number_str)?
             }
             '-' => {
                 // Handle minus sign (for script content like Lua comments --)
@@ -652,6 +642,60 @@ impl Lexer {
         }
         
         Ok(number)
+    }
+    
+    /// Parse a number with optional unit suffix (px, em, rem, deg, etc.)
+    fn parse_number_with_unit(&mut self, number_str: String) -> Result<TokenType> {
+        let value = number_str.parse::<f64>().map_err(|_| {
+            self.parse_error(format!("Invalid number: {}", number_str))
+        })?;
+        
+        // Check for unit suffix
+        let unit = self.read_unit_suffix();
+        
+        match unit.as_str() {
+            "%" => Ok(TokenType::Percentage(value)),
+            "px" => Ok(TokenType::Pixels(value)),
+            "em" => Ok(TokenType::Em(value)),
+            "rem" => Ok(TokenType::Rem(value)),
+            "vw" => Ok(TokenType::ViewportWidth(value)),
+            "vh" => Ok(TokenType::ViewportHeight(value)),
+            "deg" => Ok(TokenType::Degrees(value)),
+            "rad" => Ok(TokenType::Radians(value)),
+            "turn" => Ok(TokenType::Turns(value)),
+            "" => {
+                // No unit, determine if it's integer or float
+                if number_str.contains('.') {
+                    Ok(TokenType::Number(value))
+                } else {
+                    Ok(TokenType::Integer(value as i64))
+                }
+            }
+            _ => Err(self.parse_error(format!("Unknown unit: {}", unit)))
+        }
+    }
+    
+    /// Read unit suffix (px, em, rem, deg, etc.)
+    fn read_unit_suffix(&mut self) -> String {
+        let mut unit = String::new();
+        
+        // Check for percentage first (single character)
+        if self.peek() == Some('%') {
+            self.advance();
+            return "%".to_string();
+        }
+        
+        // Read alphabetic unit suffix
+        while let Some(ch) = self.peek() {
+            if ch.is_alphabetic() {
+                unit.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        unit
     }
     
     fn read_identifier(&mut self, first_char: char) -> Result<String> {
