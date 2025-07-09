@@ -587,6 +587,8 @@ impl SemanticAnalyzer {
             "id" | "pos_x" | "pos_y" | "width" | "height" | "style" | "layout" |
             "background_color" | "border_color" | "border_width" | "border_radius" |
             "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            // Transform properties
+            "transform" |
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
@@ -613,6 +615,8 @@ impl SemanticAnalyzer {
             "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" | "layout" |
             "style" | "background_color" | "border_color" | "border_width" |
             "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            // Transform properties
+            "transform" |
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
@@ -626,6 +630,8 @@ impl SemanticAnalyzer {
             "min_width" | "min_height" | "max_width" | "max_height" |
             "style" | "background_color" | "border_color" | "border_width" |
             "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            // Transform properties
+            "transform" |
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
