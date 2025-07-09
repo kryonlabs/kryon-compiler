@@ -226,15 +226,330 @@ pub fn compile_file_with_module_isolation(input: &str, output: &str, options: Co
     let mut preprocessor = Preprocessor::new();
     let module_graph = preprocessor.process_includes_isolated(input)?;
     
-    // For now, fall back to the old compilation system with merged content
-    // TODO: Update the full compilation pipeline to use modules
-    let merged_content = merge_module_graph_content(&module_graph);
-    let (krb_data, stats) = compile_source_with_options(&merged_content, input, options)?;
+    // Use the new module-aware compilation
+    let (krb_data, stats) = compile_with_module_graph(&module_graph, input, options)?;
     
     // Write to output file
     std::fs::write(output, &krb_data).map_err(CompilerError::Io)?;
     
     Ok((krb_data, stats, module_graph))
+}
+
+/// NEW: Compile with a module graph (module-aware compilation)
+pub fn compile_with_module_graph(
+    module_graph: &ModuleGraph,
+    filename: &str,
+    options: CompilerOptions
+) -> Result<(Vec<u8>, CompilationStats)> {
+    let mut state = CompilerState::new();
+    state.current_file_path = filename.to_string();
+    
+    let mut stats = CompilationStats::default();
+    
+    if options.debug_mode {
+        log::debug!("Starting module-aware compilation pipeline for {}", filename);
+        log::debug!("Module graph has {} modules", module_graph.modules.len());
+    }
+    
+    // Phase 0.1: Module processing - already done in preprocessor
+    if options.debug_mode {
+        log::debug!("Phase 0.1: Module processing complete");
+    }
+    
+    // Phase 0.2: Process variables with module isolation
+    if options.debug_mode {
+        log::debug!("Phase 0.2: Processing variables with module isolation...");
+    }
+    
+    // Set up the variable context with module support
+    let root_module = module_graph.modules.get(&module_graph.root_module)
+        .ok_or_else(|| CompilerError::Include { 
+            message: "Root module not found in module graph".to_string() 
+        })?;
+    
+    // Set current module context
+    state.variable_context.set_current_module(module_graph.root_module.clone());
+    
+    // Add variables from all modules in dependency order
+    for module in module_graph.get_ordered_modules() {
+        state.variable_context.add_module_variables(module)?;
+        
+        // Also add to legacy variables map for backward compatibility
+        for (name, var_def) in &module.variables {
+            if !module.is_private(name) || module.file_path == module_graph.root_module {
+                state.variables.insert(name.clone(), var_def.clone());
+            }
+        }
+    }
+    
+    // Inject custom variables
+    for (name, value) in &options.custom_variables {
+        if !crate::utils::is_valid_identifier(name) {
+            return Err(CompilerError::variable_legacy(
+                0,
+                format!("Invalid custom variable name '{}'", name)
+            ));
+        }
+        
+        state.variables.insert(name.clone(), crate::types::VariableDef {
+            value: value.clone(),
+            raw_value: value.clone(),
+            def_line: 0,
+            is_resolving: false,
+            is_resolved: true,
+        });
+        
+        state.variable_context.add_string_variable(
+            name.clone(),
+            value.clone(),
+            "custom".to_string(),
+            0
+        )?;
+    }
+    
+    stats.variable_count = state.variables.len();
+    
+    if options.debug_mode {
+        log::debug!("Phase 0.2 complete. Variables resolved: {}", stats.variable_count);
+    }
+    
+    // Phase 1: Lexical analysis and parsing
+    if options.debug_mode {
+        log::debug!("Phase 1: Lexical analysis and parsing...");
+    }
+    
+    // Merge module contents for parsing (this will be improved in future phases)
+    let merged_content = merge_module_graph_content(module_graph);
+    
+    let mut lexer = Lexer::new_with_source_map(&merged_content, filename.to_string(), crate::error::SourceMap::new());
+    let tokens = lexer.tokenize()?;
+    
+    if options.debug_mode {
+        log::debug!("Tokenized {} tokens", tokens.len());
+    }
+    
+    let mut parser = Parser::new(tokens);
+    let mut ast = parser.parse()?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1 complete. AST parsed successfully");
+    }
+    
+    // Continue with remaining phases using the existing pipeline
+    let result = compile_ast_with_state(ast, &mut state, &options)?;
+    
+    stats.element_count = state.elements.len();
+    stats.style_count = state.styles.len();
+    stats.component_count = state.component_defs.len();
+    stats.script_count = state.scripts.len();
+    stats.resource_count = state.resources.len();
+    stats.string_count = state.strings.len();
+    stats.include_count = module_graph.modules.len();
+    
+    Ok((result, stats))
+}
+
+/// Helper function to continue compilation from AST with existing state
+fn compile_ast_with_state(
+    mut ast: AstNode,
+    state: &mut CompilerState,
+    options: &CompilerOptions
+) -> Result<Vec<u8>> {
+    use crate::semantic::SemanticAnalyzer;
+    use crate::style_resolver::StyleResolver;
+    use crate::script::ScriptProcessor;
+    use crate::component_resolver::ComponentResolver;
+    use crate::size_calculator::SizeCalculator;
+    use crate::codegen::CodeGenerator;
+    
+    // Phase 1.2: Semantic analysis
+    if options.debug_mode {
+        log::debug!("Phase 1.2: Semantic analysis...");
+    }
+    
+    let mut semantic_analyzer = SemanticAnalyzer::new();
+    semantic_analyzer.analyze(&ast, state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.2 complete. Semantic analysis passed");
+    }
+    
+    // Phase 1.25: Style resolution
+    if options.debug_mode {
+        log::debug!("Phase 1.25: Resolving style inheritance...");
+    }
+    
+    let mut style_resolver = StyleResolver::new();
+    style_resolver.resolve_all_styles(state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.25 complete. Style inheritance resolved");
+    }
+    
+    // Phase 1.3: Process scripts
+    if options.debug_mode {
+        log::debug!("Phase 1.3: Processing scripts...");
+    }
+    
+    let script_processor = ScriptProcessor::new();
+    
+    // Extract scripts from AST and process them
+    if let AstNode::File { scripts, .. } = &ast {
+        for script_node in scripts {
+            let script_entry = script_processor.process_script(script_node, state)?;
+            state.scripts.push(script_entry);
+        }
+    }
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.3 complete. Scripts processed: {}", state.scripts.len());
+    }
+    
+    // Phase 1.4: Convert AST to internal representation
+    if options.debug_mode {
+        log::debug!("Phase 1.4: Converting AST to internal representation...");
+    }
+    
+    convert_ast_to_state(&ast, state)?;
+    
+    // Phase 1.45: Apply style properties to elements
+    if options.debug_mode {
+        log::debug!("Phase 1.45: Applying style properties to elements...");
+    }
+    
+    apply_style_properties_to_elements(state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.45 complete. Style properties applied to elements");
+    }
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.4 complete. Elements: {}, Styles: {}, Components: {}", 
+                   state.elements.len(), state.styles.len(), state.component_defs.len());
+    }
+    
+    // Phase 1.5: Component resolution
+    if options.debug_mode {
+        log::debug!("Phase 1.5: Resolving components...");
+    }
+    
+    let component_count = state.component_defs.len();
+    
+    if component_count > 0 {
+        // Extract component definitions and templates from AST
+        if let AstNode::File { components, .. } = &ast {
+            for component_node in components {
+                if let AstNode::Component { name, properties, template } = component_node {
+                    // Store the template AST for the resolver to use
+                    state.component_ast_templates.insert(name.clone(), (**template).clone());
+                    
+                    // Create component definition
+                    let mut component_def = ComponentDefinition {
+                        name: name.clone(),
+                        properties: Vec::new(),
+                        definition_start_line: 1,
+                        definition_root_element_index: None, // Not needed anymore
+                        calculated_size: 0,
+                        internal_template_element_offsets: std::collections::HashMap::new(),
+                    };
+                    
+                    // Process component properties
+                    for comp_prop in properties {
+                        let ComponentProperty { name: prop_name, property_type, default_value, .. } = comp_prop;
+                        let value_type = match property_type.as_str() {
+                            "String" => ValueType::String,
+                            "Bool" | "Boolean" => ValueType::Bool,
+                            "Int" | "Integer" => ValueType::Int,
+                            "Float" | "Number" => ValueType::Float,
+                            "Color" => ValueType::Color,
+                            "StyleID" | "Style" => ValueType::StyleId,
+                            _ => {
+                                // Check if it's an Enum type
+                                if property_type.starts_with("Enum(") && property_type.ends_with(")") {
+                                    ValueType::Enum
+                                } else {
+                                    ValueType::String // Default fallback
+                                }
+                            }
+                        };
+                        
+                        let prop_def = ComponentPropertyDef {
+                            name: prop_name.clone(),
+                            value_type_hint: value_type,
+                            default_value: default_value.clone().unwrap_or_default(),
+                        };
+                        component_def.properties.push(prop_def);
+                    }
+                    
+                    state.component_defs.push(component_def);
+                }
+            }
+        }
+        
+        // Now resolve components in the AST
+        let mut component_resolver = ComponentResolver::new();
+        component_resolver.resolve_components(&mut ast, state)?;
+        
+        if options.debug_mode {
+            log::debug!("Phase 1.5 complete. Component instances resolved in AST");
+        }
+        
+        // Clear the state to rebuild it with resolved AST
+        state.elements.clear();
+        state.component_defs.clear();
+        state.component_ast_templates.clear();
+        
+        // Rebuild state from resolved AST (components are now expanded to regular elements)
+        convert_ast_to_state(&ast, state)?;
+    } else {
+        if options.debug_mode {
+            log::debug!("Phase 1.5 skipped. No components to resolve.");
+        }
+    }
+    
+    // Phase 1.6: Process template variables
+    if options.debug_mode {
+        log::debug!("Phase 1.6: Processing template variables...");
+    }
+    
+    process_template_variables(state, options)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.6 complete. Template variables: {}, bindings: {}", 
+                   state.template_variables.len(), state.template_bindings.len());
+    }
+    
+    // Phase 2: Calculate sizes
+    if options.debug_mode {
+        log::debug!("Phase 2: Calculating sizes...");
+    }
+    
+    let size_calculator = SizeCalculator::new();
+    size_calculator.calculate_sizes(state)?;
+    size_calculator.validate_limits(state)?;
+    
+    let size_stats = size_calculator.get_size_stats(state);
+    
+    if options.debug_mode {
+        log::debug!("Phase 2 complete. Total size: {} bytes", size_stats.total_size);
+        if options.optimization_level >= 2 {
+            size_stats.print_breakdown();
+        }
+    }
+    
+    // Phase 3: Generate KRB binary
+    if options.debug_mode {
+        log::debug!("Phase 3: Generating KRB binary...");
+    }
+    
+    let mut code_generator = CodeGenerator::new();
+    let krb_data = code_generator.generate(state)?;
+
+    if options.debug_mode {
+        log::debug!("Phase 3 complete. KRB data size: {} bytes", krb_data.len());
+    }
+    
+    Ok(krb_data)
 }
 
 /// Temporary helper to merge module graph back to single content
@@ -249,6 +564,7 @@ fn merge_module_graph_content(graph: &ModuleGraph) -> String {
         merged.push_str("\n\n");
     }
     
+    log::debug!("Merged module content:\n{}", merged);
     merged
 }
 

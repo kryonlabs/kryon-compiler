@@ -1,3 +1,0 @@
-@script "lua" {
-    local test = "hello"
-}

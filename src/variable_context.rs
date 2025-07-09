@@ -8,13 +8,16 @@
 
 use crate::error::{CompilerError, Result};
 use crate::types::*;
+use crate::module_context::ModuleContext;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use regex::Regex;
 
 /// Variable scope levels
 #[derive(Debug, Clone, PartialEq)]
 pub enum VariableScope {
     Global,     // @variables blocks
+    Module,     // Module-level variables (with import priority)
     Component,  // Component property substitution
     Function,   // Function parameter substitution
     Style,      // Style inheritance and calculations
@@ -29,6 +32,9 @@ pub struct VariableEntry {
     pub source_file: String,
     pub source_line: usize,
     pub value_type: ValueType,
+    pub module_path: Option<PathBuf>,
+    pub import_order: Option<usize>,
+    pub is_private: bool,
 }
 
 /// Unified variable context for all substitution operations
@@ -40,6 +46,11 @@ pub struct VariableContext {
     
     // Stack for scope management
     scope_stack: Vec<VariableScope>,
+    
+    // Module-level variable management
+    module_variables: HashMap<PathBuf, HashMap<String, VariableEntry>>,
+    current_module: Option<PathBuf>,
+    import_order_counter: usize,
 }
 
 impl VariableContext {
@@ -48,6 +59,9 @@ impl VariableContext {
             variables: vec![HashMap::new()], // Start with global scope
             current_scope: VariableScope::Global,
             scope_stack: Vec::new(),
+            module_variables: HashMap::new(),
+            current_module: None,
+            import_order_counter: 0,
         };
         
         // Initialize global scope
@@ -100,18 +114,61 @@ impl VariableContext {
             source_file,
             source_line,
             value_type: ValueType::String,
+            module_path: self.current_module.clone(),
+            import_order: None,
+            is_private: name.starts_with('_'),
         };
         self.add_variable(entry)
     }
     
-    /// Look up a variable by name, searching from current scope to global
+    /// Look up a variable by name, searching from current scope to global with module priority
     pub fn get_variable(&self, name: &str) -> Option<&VariableEntry> {
-        // Search from innermost scope to outermost
+        // First, search in current scopes (Component, Function, Style)
+        for scope_vars in self.variables.iter().rev() {
+            if let Some(var) = scope_vars.get(name) {
+                // Local definitions always override imports
+                if var.scope != VariableScope::Module {
+                    return Some(var);
+                }
+            }
+        }
+        
+        // Then search in module variables with import priority
+        // Current module variables override imported ones
+        if let Some(current_module) = &self.current_module {
+            if let Some(module_vars) = self.module_variables.get(current_module) {
+                if let Some(var) = module_vars.get(name) {
+                    return Some(var);
+                }
+            }
+        }
+        
+        // Finally, search in imported module variables by import order (later imports override earlier ones)
+        let mut best_match: Option<&VariableEntry> = None;
+        let mut best_import_order = 0;
+        
+        for module_vars in self.module_variables.values() {
+            if let Some(var) = module_vars.get(name) {
+                if let Some(import_order) = var.import_order {
+                    if best_match.is_none() || import_order >= best_import_order {
+                        best_match = Some(var);
+                        best_import_order = import_order;
+                    }
+                }
+            }
+        }
+        
+        if best_match.is_some() {
+            return best_match;
+        }
+        
+        // Finally, search in regular scopes for any remaining variables
         for scope_vars in self.variables.iter().rev() {
             if let Some(var) = scope_vars.get(name) {
                 return Some(var);
             }
         }
+        
         None
     }
     
@@ -189,6 +246,67 @@ impl VariableContext {
         
         Ok(mapping)
     }
+    
+    /// Set the current module context for variable resolution
+    pub fn set_current_module(&mut self, module_path: PathBuf) {
+        self.current_module = Some(module_path);
+    }
+    
+    /// Import variables from a module with override priority
+    pub fn import_module_variables(&mut self, module: &ModuleContext, import_order: usize) -> Result<()> {
+        let module_path = module.file_path.clone();
+        
+        // Get public variables from the module
+        let public_variables = module.get_public_variables();
+        
+        // Convert to VariableEntry format
+        let mut variable_entries = HashMap::new();
+        for (name, var_def) in public_variables {
+            let entry = VariableEntry {
+                name: name.clone(),
+                value: var_def.value.clone(),
+                scope: VariableScope::Module,
+                source_file: module_path.to_string_lossy().to_string(),
+                source_line: var_def.def_line,
+                value_type: ValueType::String, // Default to string for now
+                module_path: Some(module_path.clone()),
+                import_order: Some(import_order),
+                is_private: false, // Only public variables are imported
+            };
+            variable_entries.insert(name, entry);
+        }
+        
+        // Store the module variables
+        self.module_variables.insert(module_path, variable_entries);
+        
+        Ok(())
+    }
+    
+    /// Add variables from a module context to the current context
+    pub fn add_module_variables(&mut self, module: &ModuleContext) -> Result<()> {
+        for (name, var_def) in &module.variables {
+            // Skip private variables unless we're in the same module
+            if module.is_private(name) && self.current_module.as_ref() != Some(&module.file_path) {
+                continue;
+            }
+            
+            let entry = VariableEntry {
+                name: name.clone(),
+                value: var_def.value.clone(),
+                scope: VariableScope::Module,
+                source_file: module.file_path.to_string_lossy().to_string(),
+                source_line: var_def.def_line,
+                value_type: ValueType::String,
+                module_path: Some(module.file_path.clone()),
+                import_order: module.dependency_order,
+                is_private: module.is_private(name),
+            };
+            
+            self.add_variable(entry)?;
+        }
+        
+        Ok(())
+    }
 }
 
 impl Default for VariableContext {
@@ -239,5 +357,61 @@ mod tests {
         let ctx = VariableContext::new();
         let result = ctx.substitute_variables("text: $undefined");
         assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_module_variable_isolation() {
+        let mut ctx = VariableContext::new();
+        
+        // Create mock module contexts
+        let mut module1 = ModuleContext::new(PathBuf::from("module1.kry"));
+        module1.add_variable("shared_var".to_string(), crate::types::VariableDef {
+            value: "module1_value".to_string(),
+            raw_value: "module1_value".to_string(),
+            def_line: 1,
+            is_resolving: false,
+            is_resolved: true,
+        });
+        
+        let mut module2 = ModuleContext::new(PathBuf::from("module2.kry"));
+        module2.add_variable("shared_var".to_string(), crate::types::VariableDef {
+            value: "module2_value".to_string(),
+            raw_value: "module2_value".to_string(),
+            def_line: 1,
+            is_resolving: false,
+            is_resolved: true,
+        });
+        
+        // Import module1 first, then module2 - module2 should override
+        ctx.import_module_variables(&module1, 0).unwrap();
+        ctx.import_module_variables(&module2, 1).unwrap();
+        
+        // Should get module2's value due to later import order
+        if let Some(var) = ctx.get_variable("shared_var") {
+            assert_eq!(var.value, "module2_value");
+        } else {
+            panic!("Variable not found");
+        }
+    }
+    
+    #[test]
+    fn test_private_variable_isolation() {
+        let mut ctx = VariableContext::new();
+        
+        // Create module with private variable
+        let mut module = ModuleContext::new(PathBuf::from("module.kry"));
+        module.add_variable("_private_var".to_string(), crate::types::VariableDef {
+            value: "private_value".to_string(),
+            raw_value: "private_value".to_string(),
+            def_line: 1,
+            is_resolving: false,
+            is_resolved: true,
+        });
+        
+        // Import module - private variable should not be accessible
+        ctx.import_module_variables(&module, 0).unwrap();
+        
+        // Should not find private variable
+        assert!(ctx.get_variable("_private_var").is_none());
     }
 }
