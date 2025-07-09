@@ -55,6 +55,7 @@ pub mod style_resolver;
 pub mod optimizer;
 pub mod cli;
 pub mod variable_context;
+pub mod module_context;
 use serde::Serialize;
 use std::io::Read;
 
@@ -63,6 +64,7 @@ pub use error::{CompilerError, Result};
 pub use types::*;
 pub use lexer::{Lexer, Token, TokenType};
 pub use preprocessor::{Preprocessor, preprocess_file};
+pub use module_context::{ModuleContext, ModuleGraph};
 pub use utils::{
     clean_and_quote_value, parse_color, parse_layout_string, 
     evaluate_expression, is_valid_identifier, VariableProcessor
@@ -216,6 +218,38 @@ pub struct CompilationStats {
 /// Main compiler entry point with default options
 pub fn compile_file(input_path: &str, output_path: &str) -> Result<CompilationStats> {
     compile_file_with_options(input_path, output_path, CompilerOptions::default())
+}
+
+/// NEW: Compile with module isolation (experimental)
+/// Use this to test the new module system
+pub fn compile_file_with_module_isolation(input: &str, output: &str, options: CompilerOptions) -> Result<(Vec<u8>, CompilationStats, ModuleGraph)> {
+    let mut preprocessor = Preprocessor::new();
+    let module_graph = preprocessor.process_includes_isolated(input)?;
+    
+    // For now, fall back to the old compilation system with merged content
+    // TODO: Update the full compilation pipeline to use modules
+    let merged_content = merge_module_graph_content(&module_graph);
+    let (krb_data, stats) = compile_source_with_options(&merged_content, input, options)?;
+    
+    // Write to output file
+    std::fs::write(output, &krb_data).map_err(CompilerError::Io)?;
+    
+    Ok((krb_data, stats, module_graph))
+}
+
+/// Temporary helper to merge module graph back to single content
+/// TODO: Replace this with proper module-aware compilation
+fn merge_module_graph_content(graph: &ModuleGraph) -> String {
+    let mut merged = String::new();
+    
+    // Add content from all modules in dependency order
+    for module in graph.get_ordered_modules() {
+        merged.push_str(&format!("# Module: {}\n", module.file_path.display()));
+        merged.push_str(&module.content);
+        merged.push_str("\n\n");
+    }
+    
+    merged
 }
 
 /// Compile with custom options
