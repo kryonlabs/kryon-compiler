@@ -10,6 +10,7 @@ pub enum AstNode {
     File {
         directives: Vec<AstNode>,
         styles: Vec<AstNode>,
+        fonts: Vec<AstNode>,
         components: Vec<AstNode>,
         scripts: Vec<AstNode>,
         app: Option<Box<AstNode>>,
@@ -39,6 +40,12 @@ pub enum AstNode {
         extends: Vec<String>,
         properties: Vec<AstProperty>,
         pseudo_selectors: Vec<PseudoSelector>,
+    },
+    
+    /// font declaration
+    Font {
+        name: String,
+        path: String,
     },
     
     /// Define component

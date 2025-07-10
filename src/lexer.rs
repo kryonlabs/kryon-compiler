@@ -23,6 +23,7 @@ pub enum TokenType {
     Tabs,
     Video,
     Style,
+    Font,
     Define,
     Properties,
     
@@ -104,6 +105,7 @@ impl fmt::Display for TokenType {
             TokenType::Tabs => write!(f, "Tabs"),
             TokenType::Video => write!(f, "Video"),
             TokenType::Style => write!(f, "style"),
+            TokenType::Font => write!(f, "font"),
             TokenType::Define => write!(f, "Define"),
             TokenType::Properties => write!(f, "Properties"),
             TokenType::Include => write!(f, "@include"),
@@ -763,6 +765,7 @@ impl Lexer {
             
             // Keywords
             "style" => TokenType::Style,
+            "font" => TokenType::Font,
             "Define" => TokenType::Define,
             "Properties" => TokenType::Properties,
             

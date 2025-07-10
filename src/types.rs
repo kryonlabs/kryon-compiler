@@ -87,22 +87,23 @@ impl PropertyId {
             "font_size" => PropertyId::FontSize,                   // 0x09
             "font_weight" => PropertyId::FontWeight,               // 0x0A
             "text_alignment" => PropertyId::TextAlignment,         // 0x0B
-            "src" | "image_source" => PropertyId::ImageSource,     // 0x0C
-            "opacity" => PropertyId::Opacity,                      // 0x0D
-            "z_index" => PropertyId::ZIndex,                       // 0x0E
-            "visibility" | "visible" => PropertyId::Visibility,    // 0x0F
-            "gap" => PropertyId::Gap,                              // 0x10
-            "width" => PropertyId::Width,                          // 0x19
-            "height" => PropertyId::Height,                        // 0x1B
-            "layout" => PropertyId::LayoutFlags,                   // 0x1A
-            "min_width" => PropertyId::MinWidth,                   // 0x11
-            "min_height" => PropertyId::MinHeight,                 // 0x12
-            "max_width" => PropertyId::MaxWidth,                   // 0x13
-            "max_height" => PropertyId::MaxHeight,                 // 0x14
-            "aspect_ratio" => PropertyId::AspectRatio,             // 0x15
-            "transform" => PropertyId::Transform,                  // 0x16
-            "shadow" => PropertyId::Shadow,                        // 0x17
-            "overflow" => PropertyId::Overflow,                    // 0x18
+            "font_family" => PropertyId::FontFamily,               // 0x0C
+            "src" | "image_source" => PropertyId::ImageSource,     // 0x0D
+            "opacity" => PropertyId::Opacity,                      // 0x0E
+            "z_index" => PropertyId::ZIndex,                       // 0x0F
+            "visibility" | "visible" => PropertyId::Visibility,    // 0x10
+            "gap" => PropertyId::Gap,                              // 0x11
+            "min_width" => PropertyId::MinWidth,                   // 0x12
+            "min_height" => PropertyId::MinHeight,                 // 0x13
+            "max_width" => PropertyId::MaxWidth,                   // 0x14
+            "max_height" => PropertyId::MaxHeight,                 // 0x15
+            "aspect_ratio" => PropertyId::AspectRatio,             // 0x16
+            "transform" => PropertyId::Transform,                  // 0x17
+            "shadow" => PropertyId::Shadow,                        // 0x18
+            "overflow" => PropertyId::Overflow,                    // 0x19
+            "width" => PropertyId::Width,                          // 0x1A
+            "layout" => PropertyId::LayoutFlags,                   // 0x1B
+            "height" => PropertyId::Height,                        // 0x1C
             "cursor" => PropertyId::Cursor,                        // 0x29
             "checked" => PropertyId::Checked,                      // 0x2A
             
@@ -182,23 +183,24 @@ pub enum PropertyId {
     FontSize = 0x09,
     FontWeight = 0x0A,
     TextAlignment = 0x0B,
-    ImageSource = 0x0C,
-    Opacity = 0x0D,
-    ZIndex = 0x0E,
-    Visibility = 0x0F,
-    Gap = 0x10,
-    MinWidth = 0x11,
-    MinHeight = 0x12,
-    MaxWidth = 0x13,
-    MaxHeight = 0x14,
-    AspectRatio = 0x15,
-    Transform = 0x16,
-    Shadow = 0x17,
-    Overflow = 0x18,
-    Width = 0x19,
-    Height = 0x1B,
-    LayoutFlags = 0x1A,
-    CustomData = 0x1C,
+    FontFamily = 0x0C,
+    ImageSource = 0x0D,
+    Opacity = 0x0E,
+    ZIndex = 0x0F,
+    Visibility = 0x10,
+    Gap = 0x11,
+    MinWidth = 0x12,
+    MinHeight = 0x13,
+    MaxWidth = 0x14,
+    MaxHeight = 0x15,
+    AspectRatio = 0x16,
+    Transform = 0x17,
+    Shadow = 0x18,
+    Overflow = 0x19,
+    Width = 0x1A,
+    LayoutFlags = 0x1B,
+    Height = 0x1C,
+    CustomData = 0x1D,
     // App-specific properties
     WindowWidth = 0x20,
     WindowHeight = 0x21,
@@ -623,6 +625,14 @@ pub struct StyleEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct FontEntry {
+    pub name: String,
+    pub path: String,
+    pub name_index: u8,
+    pub path_index: u8,
+}
+
+#[derive(Debug, Clone)]
 pub struct Element {
     // KRB header fields
     pub element_type: ElementType,
@@ -683,6 +693,7 @@ pub struct CompilerState {
     pub elements: Vec<Element>,
     pub strings: Vec<StringEntry>,
     pub styles: Vec<StyleEntry>,
+    pub fonts: Vec<FontEntry>,
     pub scripts: Vec<ScriptEntry>,
     pub resources: Vec<ResourceEntry>,
     pub component_defs: Vec<ComponentDefinition>,
@@ -735,6 +746,7 @@ impl CompilerState {
             elements: Vec::new(),
             strings: Vec::new(),
             styles: Vec::new(),
+            fonts: Vec::new(),
             scripts: Vec::new(),
             resources: Vec::new(),
             component_defs: Vec::new(),

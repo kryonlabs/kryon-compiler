@@ -947,7 +947,7 @@ pub fn compile_source_with_options(
 
 fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> {
     match ast {
-        AstNode::File { app, styles, components, scripts, directives } => {
+        AstNode::File { app, styles, fonts, components, scripts, directives } => {
             // Process styles first since elements may reference them
             for style_node in styles {
                 if let AstNode::Style { name, extends: _, properties, pseudo_selectors } = style_node {
@@ -1013,6 +1013,48 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
                         println!("Added new style '{}' with ID {} and {} properties", name, style_id, style_entry.properties.len());
                         state.styles.push(style_entry);
                     }
+                }
+            }
+            
+            // Process fonts
+            for font_node in fonts {
+                if let AstNode::Font { name, path } = font_node {
+                    // Add font name to string table
+                    let name_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *name) {
+                        pos as u8
+                    } else {
+                        let index = state.strings.len() as u8;
+                        state.strings.push(StringEntry {
+                            text: name.clone(),
+                            length: name.len(),
+                            index,
+                        });
+                        index
+                    };
+                    
+                    // Add font path to string table
+                    let path_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *path) {
+                        pos as u8
+                    } else {
+                        let index = state.strings.len() as u8;
+                        state.strings.push(StringEntry {
+                            text: path.clone(),
+                            length: path.len(),
+                            index,
+                        });
+                        index
+                    };
+                    
+                    // Create font entry
+                    let font_entry = FontEntry {
+                        name: name.clone(),
+                        path: path.clone(),
+                        name_index,
+                        path_index,
+                    };
+                    
+                    println!("Added font '{}' with path '{}'", name, path);
+                    state.fonts.push(font_entry);
                 }
             }
             
@@ -1246,7 +1288,7 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid color value: {}", cleaned_value)));
             }
         }
-        PropertyId::BorderWidth | PropertyId::BorderRadius => {
+        PropertyId::BorderWidth | PropertyId::BorderRadius | PropertyId::Padding | PropertyId::Margin | PropertyId::Gap => {
             if let Ok(val) = cleaned_value.parse::<u8>() {
                 Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Byte, size: 1, value: vec![val] })
             } else {
@@ -1259,6 +1301,31 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 _ => 1u8, // Default to center
             };
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Enum, size: 1, value: vec![alignment_val] })
+        }
+        PropertyId::FontSize => {
+            if let Ok(val) = cleaned_value.parse::<u16>() {
+                Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Short, size: 2, value: val.to_le_bytes().to_vec() })
+            } else {
+                return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid font size value: {}", cleaned_value)));
+            }
+        }
+        PropertyId::FontWeight => {
+            let weight_val = match cleaned_value.to_lowercase().as_str() {
+                "normal" => 400u16,
+                "bold" => 700u16,
+                "light" => 300u16,
+                "heavy" => 900u16,
+                _ => if let Ok(val) = cleaned_value.parse::<u16>() { val } else { 400 }
+            };
+            Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Short, size: 2, value: weight_val.to_le_bytes().to_vec() })
+        }
+        PropertyId::FontFamily => {
+            let string_index = state.strings.iter().position(|s| s.text == cleaned_value).map(|i| i as u8).unwrap_or_else(|| {
+                let index = state.strings.len() as u8;
+                state.strings.push(StringEntry { text: cleaned_value.clone(), length: cleaned_value.len(), index });
+                index
+            });
+            Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::String, size: 1, value: vec![string_index] })
         }
         PropertyId::TextContent | PropertyId::WindowTitle => {
             let string_index = state.strings.iter().position(|s| s.text == cleaned_value).map(|i| i as u8).unwrap_or_else(|| {

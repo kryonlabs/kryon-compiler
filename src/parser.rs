@@ -22,6 +22,7 @@ impl Parser {
     pub fn parse(&mut self) -> Result<AstNode> {
         let mut directives = Vec::new();
         let mut styles = Vec::new();
+        let mut fonts = Vec::new();
         let mut components = Vec::new();
         let mut scripts = Vec::new();
         let mut app = None;
@@ -54,6 +55,9 @@ impl Parser {
                 }
                 TokenType::Style => {
                     styles.push(self.parse_style()?);
+                }
+                TokenType::Font => {
+                    fonts.push(self.parse_font()?);
                 }
                 TokenType::Define => {
                     components.push(self.parse_component()?);
@@ -109,6 +113,7 @@ impl Parser {
         Ok(AstNode::File {
             directives,
             styles,
+            fonts,
             components,
             scripts,
             app,
@@ -480,6 +485,37 @@ impl Parser {
             }
             _ => Ok(vec![value.to_string()]),
         }
+    }
+    
+    fn parse_font(&mut self) -> Result<AstNode> {
+        self.consume(TokenType::Font, "Expected 'font'")?;
+        
+        // Parse font name (first string)
+        let name = if let TokenType::String(name) = &self.peek().token_type {
+            name.clone()
+        } else {
+            return Err(CompilerError::parse_legacy(
+                self.peek().line,
+                format!("Expected font name string, but found {}", self.peek().token_type)
+            ));
+        };
+        self.advance();
+        
+        // Parse font path (second string)
+        let path = if let TokenType::String(path) = &self.peek().token_type {
+            path.clone()
+        } else {
+            return Err(CompilerError::parse_legacy(
+                self.peek().line,
+                format!("Expected font path string, but found {}", self.peek().token_type)
+            ));
+        };
+        self.advance();
+        
+        Ok(AstNode::Font {
+            name,
+            path,
+        })
     }
     
     fn parse_component(&mut self) -> Result<AstNode> {
