@@ -72,12 +72,12 @@ impl SemanticAnalyzer {
     
     fn collect_style_definition(&mut self, ast: &AstNode, state: &mut CompilerState) -> Result<()> {
         if let AstNode::Style { name, extends, properties, pseudo_selectors: _ } = ast {
-            // Check for duplicate style names
-            if state.styles.iter().any(|s| s.source_name == *name) {
-                return Err(CompilerError::semantic_legacy(
-                    0,
-                    format!("Style '{}' is already defined", name)
-                ));
+            // Check for duplicate style names - but allow includes to redefine styles
+            // The latest definition wins (include order matters)
+            if let Some(existing_index) = state.styles.iter().position(|s| s.source_name == *name) {
+                // Remove the existing style definition - the new one will replace it
+                state.styles.remove(existing_index);
+                log::debug!("Style '{}' redefined, using latest definition", name);
             }
             
             let style_id = (state.styles.len() + 1) as u8;
@@ -112,13 +112,13 @@ impl SemanticAnalyzer {
     }
     
     fn collect_component_definition(&mut self, ast: &AstNode, state: &mut CompilerState) -> Result<()> {
-        if let AstNode::Component { name, properties, template } = ast {
-            // Check for duplicate component names
-            if state.component_defs.iter().any(|c| c.name == *name) {
-                return Err(CompilerError::semantic_legacy(
-                    0,
-                    format!("Component '{}' is already defined", name)
-                ));
+        if let AstNode::Component { name, properties, template: _ } = ast {
+            // Check for duplicate component names - but allow includes to redefine components
+            // The latest definition wins (include order matters)
+            if let Some(existing_index) = state.component_defs.iter().position(|c| c.name == *name) {
+                // Remove the existing component definition - the new one will replace it
+                state.component_defs.remove(existing_index);
+                log::debug!("Component '{}' redefined, using latest definition", name);
             }
             
             let mut component_def = ComponentDefinition {
