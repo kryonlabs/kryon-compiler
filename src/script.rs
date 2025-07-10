@@ -255,42 +255,6 @@ impl ScriptProcessor {
 }
 
 impl CompilerState {
-    pub fn add_string(&mut self, text: &str) -> Result<u8> {
-        if text.is_empty() {
-            if self.strings.is_empty() {
-                self.strings.push(StringEntry {
-                    text: String::new(),
-                    length: 0,
-                    index: 0,
-                });
-            }
-            return Ok(0);
-        }
-        
-        // Check for existing string
-        for (i, entry) in self.strings.iter().enumerate() {
-            if entry.text == text {
-                return Ok(i as u8);
-            }
-        }
-        
-        if self.strings.len() >= MAX_STRINGS {
-            return Err(CompilerError::LimitExceeded {
-                limit_type: "strings".to_string(),
-                limit: MAX_STRINGS,
-            });
-        }
-        
-        let index = self.strings.len() as u8;
-        self.strings.push(StringEntry {
-            text: text.to_string(),
-            length: text.len(),
-            index,
-        });
-        
-        Ok(index)
-    }
-    
     pub fn add_resource(&mut self, resource_type: u8, path: &str) -> Result<u8> {
         let name_index = self.add_string(path)?;
         

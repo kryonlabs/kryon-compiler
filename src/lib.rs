@@ -981,17 +981,7 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
                         let style_id = (state.styles.len() + 1) as u8; // 1-based style IDs
                         
                         // Add style name to string table
-                        let name_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *name) {
-                            pos as u8
-                        } else {
-                            let index = state.strings.len() as u8;
-                            state.strings.push(StringEntry {
-                                text: name.clone(),
-                                length: name.len(),
-                                index,
-                            });
-                            index
-                        };
+                        let name_index = state.add_string(name.clone())?;
                         
                         // Create style entry (krb_properties already computed above)
                         let style_entry = StyleEntry {
@@ -1020,30 +1010,10 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
             for font_node in fonts {
                 if let AstNode::Font { name, path } = font_node {
                     // Add font name to string table
-                    let name_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *name) {
-                        pos as u8
-                    } else {
-                        let index = state.strings.len() as u8;
-                        state.strings.push(StringEntry {
-                            text: name.clone(),
-                            length: name.len(),
-                            index,
-                        });
-                        index
-                    };
+                    let name_index = state.add_string(name.clone())?;
                     
                     // Add font path to string table
-                    let path_index = if let Some(pos) = state.strings.iter().position(|s| s.text == *path) {
-                        pos as u8
-                    } else {
-                        let index = state.strings.len() as u8;
-                        state.strings.push(StringEntry {
-                            text: path.clone(),
-                            length: path.len(),
-                            index,
-                        });
-                        index
-                    };
+                    let path_index = state.add_string(path.clone())?;
                     
                     // Create font entry
                     let font_entry = FontEntry {
@@ -1130,30 +1100,16 @@ fn convert_element_to_state(
             });
             
             match ast_prop.key.as_str() {
-                // Handle element header fields directly
-                "pos_x" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.pos_x = val; },
-                "pos_y" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.pos_y = val; },
-                "width" | "window_width" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.width = val; },
-                "height" | "window_height" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.height = val; },
-                "layout" => {
-                    match crate::utils::parse_layout_string(&ast_prop.cleaned_value()) {
-                        Ok(layout_byte) => element.layout = layout_byte,
-                        Err(e) => return Err(CompilerError::semantic_legacy(ast_prop.line, e.to_string())),
-                    }
-                },
+                // Handle element header fields directly (only truly element-specific properties)
+                "window_width" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.width = val; },
+                "window_height" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.height = val; },
                 "id" => {
                     // Store the element ID string in the string table and set the index
                     let id_string = ast_prop.cleaned_value();
                     let string_index = if let Some(entry) = state.strings.iter().position(|s| s.text == id_string) {
                         entry as u8
                     } else {
-                        let index = state.strings.len() as u8;
-                        state.strings.push(StringEntry {
-                            text: id_string.to_string(),
-                            length: id_string.len(),
-                            index,
-                        });
-                        index
+                        state.add_string(id_string.to_string())?
                     };
                     element.id_string_index = string_index;
                     println!("Set element ID '{}' to string index {}", id_string, string_index);
@@ -1320,19 +1276,11 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Short, size: 2, value: weight_val.to_le_bytes().to_vec() })
         }
         PropertyId::FontFamily => {
-            let string_index = state.strings.iter().position(|s| s.text == cleaned_value).map(|i| i as u8).unwrap_or_else(|| {
-                let index = state.strings.len() as u8;
-                state.strings.push(StringEntry { text: cleaned_value.clone(), length: cleaned_value.len(), index });
-                index
-            });
+            let string_index = state.add_string(cleaned_value.clone())?;
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::String, size: 1, value: vec![string_index] })
         }
         PropertyId::TextContent | PropertyId::WindowTitle => {
-            let string_index = state.strings.iter().position(|s| s.text == cleaned_value).map(|i| i as u8).unwrap_or_else(|| {
-                let index = state.strings.len() as u8;
-                state.strings.push(StringEntry { text: cleaned_value.clone(), length: cleaned_value.len(), index });
-                index
-            });
+            let string_index = state.add_string(cleaned_value.clone())?;
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::String, size: 1, value: vec![string_index] })
         }
         PropertyId::LayoutFlags => {
@@ -1363,11 +1311,7 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
         PropertyId::AlignItems | PropertyId::AlignContent | PropertyId::JustifyContent |
         PropertyId::JustifyItems | PropertyId::JustifySelf | PropertyId::AlignSelf => {
             // Store as string index like other string properties
-            let string_index = state.strings.iter().position(|s| s.text == cleaned_value).map(|i| i as u8).unwrap_or_else(|| {
-                let index = state.strings.len() as u8;
-                state.strings.push(StringEntry { text: cleaned_value.clone(), length: cleaned_value.len(), index });
-                index
-            });
+            let string_index = state.add_string(cleaned_value.clone())?;
             Some(KrbProperty { 
                 property_id: property_id as u8, 
                 value_type: ValueType::String, 
@@ -1636,38 +1580,31 @@ fn process_template_variables(state: &mut CompilerState, options: &CompilerOptio
     // Collect all variables from @variables blocks
     let mut variable_map: HashMap<String, (u8, ValueType)> = HashMap::new();
     
-    // First, create template variables from the @variables block
-    for (var_name, var_def) in &state.variables {
-        let name_index = state.strings.iter().position(|s| s.text == *var_name)
-            .map(|i| i as u8)
-            .unwrap_or_else(|| {
-                let index = state.strings.len() as u8;
-                state.strings.push(StringEntry {
-                    text: var_name.clone(),
-                    length: var_name.len(),
-                    index,
-                });
-                index
-            });
+    // First, collect variable data to avoid borrowing conflicts
+    let variables_to_process: Vec<(String, String)> = state.variables.iter()
+        .map(|(name, def)| (name.clone(), def.value.clone()))
+        .collect();
+    
+    // Create template variables from the @variables block
+    for (var_name, var_value) in variables_to_process {
+        let name_index = if let Some(idx) = state.strings.iter().position(|s| s.text == var_name) {
+            idx as u8
+        } else {
+            state.add_string(var_name.clone())?
+        };
         
-        let default_value_index = state.strings.iter().position(|s| s.text == var_def.value)
-            .map(|i| i as u8)
-            .unwrap_or_else(|| {
-                let index = state.strings.len() as u8;
-                state.strings.push(StringEntry {
-                    text: var_def.value.clone(),
-                    length: var_def.value.len(),
-                    index,
-                });
-                index
-            });
+        let default_value_index = if let Some(idx) = state.strings.iter().position(|s| s.text == var_value) {
+            idx as u8
+        } else {
+            state.add_string(var_value.clone())?
+        };
         
         // Determine value type based on the value
-        let value_type = if var_def.value.parse::<i32>().is_ok() {
+        let value_type = if var_value.parse::<i32>().is_ok() {
             ValueType::Int
-        } else if var_def.value.parse::<f32>().is_ok() {
+        } else if var_value.parse::<f32>().is_ok() {
             ValueType::Float
-        } else if var_def.value == "true" || var_def.value == "false" {
+        } else if var_value == "true" || var_value == "false" {
             ValueType::Bool
         } else {
             ValueType::String
@@ -1677,7 +1614,7 @@ fn process_template_variables(state: &mut CompilerState, options: &CompilerOptio
             name: var_name.clone(),
             name_index,
             value_type,
-            default_value: var_def.value.clone(),
+            default_value: var_value.clone(),
             default_value_index,
         };
         
@@ -1685,7 +1622,8 @@ fn process_template_variables(state: &mut CompilerState, options: &CompilerOptio
         state.template_variables.push(template_var);
     }
     
-    // Now scan through all elements for properties with template variables
+    // Collect element properties data to avoid borrowing conflicts
+    let mut properties_to_process = Vec::new();
     for (element_index, element) in state.elements.iter().enumerate() {
         for source_prop in &element.source_properties {
             // Check if this property has template variables
@@ -1697,42 +1635,41 @@ fn process_template_variables(state: &mut CompilerState, options: &CompilerOptio
             }
             
             if !template_variables.is_empty() {
-                // Get the expression string index
-                let expression_index = state.strings.iter().position(|s| s.text == source_prop.value)
-                    .map(|i| i as u8)
-                    .unwrap_or_else(|| {
-                        let index = state.strings.len() as u8;
-                        state.strings.push(StringEntry {
-                            text: source_prop.value.clone(),
-                            length: source_prop.value.len(),
-                            index,
-                        });
-                        index
-                    });
-                
-                // Map property key to property ID
-                let property_id = PropertyId::from_name(&source_prop.key) as u8;
-                
-                // Get variable indices
-                let mut variable_indices = Vec::new();
-                for var_name in &template_variables {
-                    if let Some((var_index, _)) = variable_map.get(var_name) {
-                        variable_indices.push(*var_index);
-                    }
-                }
-                
-                let template_binding = TemplateBinding {
-                    element_index: element_index as u16,
-                    property_id,
-                    template_expression: source_prop.value.clone(),
-                    template_expression_index: expression_index,
-                    variable_count: variable_indices.len() as u8,
-                    variable_indices,
-                };
-                
-                state.template_bindings.push(template_binding);
+                properties_to_process.push((element_index, source_prop.key.clone(), source_prop.value.clone(), template_variables));
             }
         }
+    }
+    
+    // Now process the collected properties
+    for (element_index, prop_key, prop_value, template_variables) in properties_to_process {
+        // Get the expression string index
+        let expression_index = if let Some(idx) = state.strings.iter().position(|s| s.text == prop_value) {
+            idx as u8
+        } else {
+            state.add_string(prop_value.clone())?
+        };
+                
+        // Map property key to property ID
+        let property_id = PropertyId::from_name(&prop_key) as u8;
+        
+        // Get variable indices
+        let mut variable_indices = Vec::new();
+        for var_name in &template_variables {
+            if let Some((var_index, _)) = variable_map.get(var_name) {
+                variable_indices.push(*var_index);
+            }
+        }
+        
+        let template_binding = TemplateBinding {
+            element_index: element_index as u16,
+            property_id,
+            template_expression: prop_value.clone(),
+            template_expression_index: expression_index,
+            variable_count: variable_indices.len() as u8,
+            variable_indices,
+        };
+        
+        state.template_bindings.push(template_binding);
     }
     
     // Set the template variable flag if we have any template variables
@@ -1761,6 +1698,7 @@ fn extract_template_variables(value: &str) -> Vec<String> {
     
     variables
 }
+
 
 #[cfg(test)]
 mod tests {

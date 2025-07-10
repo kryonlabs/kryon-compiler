@@ -17,6 +17,9 @@ impl SizeCalculator {
         // Calculate element sizes
         self.calculate_element_sizes(state)?;
         
+        // TODO: Extract header values from style properties (architectural optimization)
+        // self.extract_header_values_from_styles(state)?;
+        
         // Calculate style table size
         self.calculate_style_table_size(state);
         
@@ -209,14 +212,18 @@ impl SizeCalculator {
     pub fn calculate_section_offsets(&self, state: &mut CompilerState) {
         let mut current_offset = KRB_HEADER_SIZE as u32;
         
+        println!("DEBUG: Calculating offsets - header size = {} (0x{:X})", KRB_HEADER_SIZE, KRB_HEADER_SIZE);
+        
         // The order of these additions MUST match the physical write order in codegen.
         
         // 1. String table
         state.string_offset = current_offset;
+        println!("DEBUG: String offset = {} (0x{:X}), string size = {}", current_offset, current_offset, state.total_string_data_size);
         current_offset += state.total_string_data_size;
         
         // 2. Element tree
         state.element_offset = current_offset;
+        println!("DEBUG: Element offset = {} (0x{:X}), element size = {}", current_offset, current_offset, state.total_element_data_size);
         current_offset += state.total_element_data_size;
         
         // 3. Style table
@@ -365,6 +372,60 @@ impl SizeCalculator {
             template_binding_count: state.template_bindings.len(),
             transform_count: state.transforms.len(),
         }
+    }
+    
+    /// Extract style property values to element headers for renderer optimization
+    /// This is the architecturally correct place - after element parsing but before finalization
+    fn extract_header_values_from_styles(&self, state: &mut CompilerState) -> Result<()> {
+        // Process each element and extract relevant style properties to headers
+        for element_index in 0..state.elements.len() {
+            let style_id = state.elements[element_index].style_id;
+            
+            // Skip elements without styles
+            if style_id == 0 {
+                continue;
+            }
+            
+            // Find the style and extract header values
+            if let Some(style) = state.styles.iter().find(|s| s.id == style_id) {
+                for property in &style.properties {
+                    match property.property_id {
+                        0x1A => { // PropertyId::Width
+                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                                let width = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                state.elements[element_index].width = width;
+                            }
+                        },
+                        0x1C => { // PropertyId::Height
+                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                                let height = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                state.elements[element_index].height = height;
+                            }
+                        },
+                        0x51 => { // PropertyId::Top -> pos_y
+                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                                let pos_y = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                state.elements[element_index].pos_y = pos_y;
+                            }
+                        },
+                        0x54 => { // PropertyId::Left -> pos_x
+                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                                let pos_x = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                state.elements[element_index].pos_x = pos_x;
+                            }
+                        },
+                        0x1B => { // PropertyId::LayoutFlags
+                            if property.value_type as u8 == crate::types::ValueType::Byte as u8 && property.size == 1 {
+                                state.elements[element_index].layout = property.value[0];
+                            }
+                        },
+                        _ => {} // Ignore other properties
+                    }
+                }
+            }
+        }
+        
+        Ok(())
     }
 }
 

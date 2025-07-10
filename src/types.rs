@@ -161,9 +161,10 @@ impl PropertyId {
         }
     }
     
-    /// Check if this property should be handled in the element header instead of as a KRB property
+    /// Check if this property should be handled ONLY in the element header and never as a style property
+    /// These are truly element-specific properties that don't make sense as inheritable styles
     pub fn is_element_header_property(key: &str) -> bool {
-        matches!(key, "pos_x" | "pos_y" | "width" | "height" | "style" | "layout" | "checked")
+        matches!(key, "id" | "checked")
     }
 }
 
@@ -781,6 +782,48 @@ impl CompilerState {
             transform_offset: 0,
             total_transform_size: 0,
         }
+    }
+    
+    /// Add a string to the string table with deduplication
+    /// Returns the index of the string (existing or newly added)
+    pub fn add_string<S: AsRef<str>>(&mut self, text: S) -> Result<u8, crate::error::CompilerError> {
+        let text_str = text.as_ref();
+        
+        // Handle empty string special case
+        if text_str.is_empty() {
+            if self.strings.is_empty() {
+                self.strings.push(StringEntry {
+                    text: String::new(),
+                    length: 0,
+                    index: 0,
+                });
+            }
+            return Ok(0);
+        }
+        
+        // Check if string already exists
+        for (index, existing) in self.strings.iter().enumerate() {
+            if existing.text == text_str {
+                return Ok(index as u8);
+            }
+        }
+        
+        // Check limits
+        if self.strings.len() >= MAX_STRINGS {
+            return Err(crate::error::CompilerError::LimitExceeded {
+                limit_type: "strings".to_string(),
+                limit: MAX_STRINGS,
+            });
+        }
+        
+        // Add new string
+        let index = self.strings.len() as u8;
+        self.strings.push(StringEntry {
+            text: text_str.to_string(),
+            length: text_str.len(),
+            index,
+        });
+        Ok(index)
     }
 }
 

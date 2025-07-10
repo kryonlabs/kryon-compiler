@@ -39,6 +39,8 @@ impl CodeGenerator {
             .count() as u16;
         
         // Section counts
+        println!("DEBUG: Writing header_with_offsets counts - elements: {}, styles: {}, strings: {}, scripts: {}", 
+                main_element_count, state.styles.len(), state.strings.len(), state.scripts.len());
         self.output.write_u16::<LittleEndian>(main_element_count)?;
         self.output.write_u16::<LittleEndian>(state.styles.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.component_defs.len() as u16)?;
@@ -140,6 +142,8 @@ impl CodeGenerator {
             .count() as u16;
         
         // Section counts
+        println!("DEBUG: Writing header counts - elements: {}, styles: {}, strings: {}, scripts: {}", 
+                main_element_count, state.styles.len(), state.strings.len(), state.scripts.len());
         self.output.write_u16::<LittleEndian>(main_element_count)?;
         self.output.write_u16::<LittleEndian>(state.styles.len() as u16)?;
         self.output.write_u16::<LittleEndian>(state.component_defs.len() as u16)?;
