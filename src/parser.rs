@@ -1185,7 +1185,7 @@ mod tests {
                         
                         // Should have the original window_title, not auto-generated
                         let title_prop = properties.iter().find(|p| p.key == "window_title").unwrap();
-                        assert_eq!(title_prop.value, "\"Existing App\"");
+                        assert_eq!(title_prop.value.to_string(), "\"Existing App\"");
                         
                         // Should have one child (the Text element)
                         assert_eq!(children.len(), 1);
@@ -1250,5 +1250,80 @@ mod tests {
         // Test duplicate variables (should only appear once)
         let vars = parser.extract_template_variables("$var and $var again");
         assert_eq!(vars, vec!["var"]);
+    }
+
+    #[test]
+    fn test_parse_input_with_type() {
+        let source = r#"
+            App {
+                Input {
+                    type: "text"
+                    placeholder: "Enter text"
+                    value: "default"
+                }
+                Input {
+                    type: "checkbox"
+                    checked: true
+                    text: "Accept terms"
+                }
+                Input {
+                    type: "range"
+                    min: 0
+                    max: 100
+                    step: 1
+                    value: 50
+                }
+            }
+        "#;
+        
+        let mut lexer = Lexer::new(source, "test.kry".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse().unwrap();
+        
+        match ast {
+            AstNode::File { app: Some(app), .. } => {
+                match app.as_ref() {
+                    AstNode::Element { element_type, children, .. } => {
+                        assert_eq!(element_type, "App");
+                        assert_eq!(children.len(), 3);
+                        
+                        // Check first Input (text type)
+                        if let AstNode::Element { element_type, properties, .. } = &children[0] {
+                            assert_eq!(element_type, "Input");
+                            assert!(properties.iter().any(|p| p.key == "type" && p.value.to_string() == "\"text\""));
+                            assert!(properties.iter().any(|p| p.key == "placeholder"));
+                            assert!(properties.iter().any(|p| p.key == "value"));
+                        } else {
+                            panic!("Expected first child to be Input element");
+                        }
+                        
+                        // Check second Input (checkbox type)
+                        if let AstNode::Element { element_type, properties, .. } = &children[1] {
+                            assert_eq!(element_type, "Input");
+                            assert!(properties.iter().any(|p| p.key == "type" && p.value.to_string() == "\"checkbox\""));
+                            assert!(properties.iter().any(|p| p.key == "checked"));
+                            assert!(properties.iter().any(|p| p.key == "text"));
+                        } else {
+                            panic!("Expected second child to be Input element");
+                        }
+                        
+                        // Check third Input (range type)
+                        if let AstNode::Element { element_type, properties, .. } = &children[2] {
+                            assert_eq!(element_type, "Input");
+                            assert!(properties.iter().any(|p| p.key == "type" && p.value.to_string() == "\"range\""));
+                            assert!(properties.iter().any(|p| p.key == "min"));
+                            assert!(properties.iter().any(|p| p.key == "max"));
+                            assert!(properties.iter().any(|p| p.key == "step"));
+                            assert!(properties.iter().any(|p| p.key == "value"));
+                        } else {
+                            panic!("Expected third child to be Input element");
+                        }
+                    }
+                    _ => panic!("Expected App element"),
+                }
+            }
+            _ => panic!("Expected File with App"),
+        }
     }
 }

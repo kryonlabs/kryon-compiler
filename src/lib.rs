@@ -1103,6 +1103,8 @@ fn convert_element_to_state(
                 // Handle element header fields directly (only truly element-specific properties)
                 "window_width" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.width = val; },
                 "window_height" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.height = val; },
+                "pos_x" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.pos_x = val; },
+                "pos_y" => if let Ok(val) = ast_prop.cleaned_value().parse::<u16>() { element.pos_y = val; },
                 "id" => {
                     // Store the element ID string in the string table and set the index
                     let id_string = ast_prop.cleaned_value();

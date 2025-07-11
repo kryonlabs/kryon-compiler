@@ -72,7 +72,7 @@ impl StyleResolver {
             adj_list.entry(node.clone()).or_insert(Vec::new());
             
             for dep in dependencies {
-                *in_degree.entry(dep.clone()).or_insert(0) += 1;
+                *in_degree.entry(node.clone()).or_insert(0) += 1;
                 adj_list.entry(dep.clone()).or_insert(Vec::new()).push(node.clone());
             }
         }

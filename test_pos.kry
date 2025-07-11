@@ -1,0 +1,8 @@
+App {
+    Container {
+        pos_x: 200
+        pos_y: 100
+        width: 300
+        height: 200
+    }
+}
