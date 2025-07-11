@@ -401,21 +401,6 @@ impl SemanticAnalyzer {
                     ));
                 }
             }
-            "layout" => {
-                // Validate layout values
-                let cleaned_value = crate::utils::clean_and_quote_value(value).0;
-                let valid_layouts = ["row", "column", "center", "start", "end", "grow", "wrap", "absolute"];
-                let layout_parts: Vec<&str> = cleaned_value.split_whitespace().collect();
-                
-                for part in layout_parts {
-                    if !valid_layouts.contains(&part) {
-                        self.warnings.push(format!(
-                            "Line {}: Unknown layout value '{}' in property '{}'",
-                            line, part, key
-                        ));
-                    }
-                }
-            }
             _ => {}
         }
         
@@ -519,18 +504,6 @@ impl SemanticAnalyzer {
                     ))
                 }
             }
-            PropertyId::LayoutFlags => {
-                // Handle layout property (e.g., "row center", "column start")
-                let layout_byte = crate::utils::parse_layout_string(&cleaned_value).map_err(|e| {
-                    CompilerError::semantic_legacy(prop.line_num, format!("Invalid layout value: {}", e))
-                })?;
-                Ok(KrbProperty {
-                    property_id: property_id as u8,
-                    value_type: ValueType::Byte,
-                    size: 1,
-                    value: vec![layout_byte],
-                })
-            }
             PropertyId::Width | PropertyId::Height => {
                 // Handle width/height properties as u16 values
                 if let Ok(size) = cleaned_value.parse::<u16>() {
@@ -591,7 +564,7 @@ impl SemanticAnalyzer {
             "window_title" | "window_width" | "window_height" | "window_min_width" |
             "window_min_height" | "window_max_width" | "window_max_height" |
             "resizable" | "keep_aspect_ratio" | "scale_factor" | "icon" |
-            "version" | "author" | "background_color" | "id" | "style" | "layout" | "visible" |
+            "version" | "author" | "background_color" | "id" | "style" | "visible" |
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
@@ -609,7 +582,7 @@ impl SemanticAnalyzer {
         matches!(key,
             "text" | "text_color" | "font_size" | "font_weight" | "font_family" |
             "text_alignment" | "line_height" | "text_decoration" | "text_transform" |
-            "id" | "pos_x" | "pos_y" | "width" | "height" | "style" | "layout" |
+            "id" | "pos_x" | "pos_y" | "width" | "height" | "style" |
             "background_color" | "border_color" | "border_width" | "border_radius" |
             "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
             // Transform properties
@@ -717,7 +690,7 @@ impl SemanticAnalyzer {
         let is_common_property = matches!(property,
             "type" | "id" | "style" | "disabled" | "visible" | "width" | "height" |
             "padding" | "margin" | "background_color" | "border_color" | "border_width" |
-            "border_radius" | "opacity" | "z_index" | "layout" | "pos_x" | "pos_y" |
+            "border_radius" | "opacity" | "z_index" | "pos_x" | "pos_y" |
             "onClick" | "onFocus" | "onBlur" | "onHover" | "onPress" | "onRelease" |
             // Box model properties
             "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
@@ -803,7 +776,7 @@ impl SemanticAnalyzer {
         let mut props = vec![
             "type", "id", "style", "disabled", "visible", "width", "height",
             "padding", "margin", "background_color", "border_color", "border_width",
-            "border_radius", "opacity", "z_index", "layout",
+            "border_radius", "opacity", "z_index",
             "onClick", "onFocus", "onBlur", "onHover"
         ];
         
@@ -856,7 +829,7 @@ impl SemanticAnalyzer {
     
     fn is_valid_image_property(&self, key: &str) -> bool {
         matches!(key,
-            "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" | "layout" |
+            "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" |
             "style" | "background_color" | "border_color" | "border_width" |
             "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
             // Transform properties
@@ -877,7 +850,7 @@ impl SemanticAnalyzer {
     
     fn is_valid_container_property(&self, key: &str) -> bool {
         matches!(key,
-            "layout" | "gap" | "id" | "pos_x" | "pos_y" | "width" | "height" |
+            "gap" | "id" | "pos_x" | "pos_y" | "width" | "height" |
             "min_width" | "min_height" | "max_width" | "max_height" |
             "style" | "background_color" | "border_color" | "border_width" |
             "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |

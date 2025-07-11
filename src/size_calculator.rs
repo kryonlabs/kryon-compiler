@@ -414,11 +414,6 @@ impl SizeCalculator {
                                 state.elements[element_index].pos_x = pos_x;
                             }
                         },
-                        0x1B => { // PropertyId::LayoutFlags
-                            if property.value_type as u8 == crate::types::ValueType::Byte as u8 && property.size == 1 {
-                                state.elements[element_index].layout = property.value[0];
-                            }
-                        },
                         _ => {} // Ignore other properties
                     }
                 }

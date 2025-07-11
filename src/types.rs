@@ -220,7 +220,6 @@ impl PropertyId {
             "shadow" => PropertyId::Shadow,                        // 0x18
             "overflow" => PropertyId::Overflow,                    // 0x19
             "width" => PropertyId::Width,                          // 0x1A
-            "layout" => PropertyId::LayoutFlags,                   // 0x1B
             "height" => PropertyId::Height,                        // 0x1C
             "cursor" => PropertyId::Cursor,                        // 0x29
             "checked" => PropertyId::Checked,                      // 0x2A
@@ -352,7 +351,6 @@ pub enum PropertyId {
     Shadow = 0x18,
     Overflow = 0x19,
     Width = 0x1A,
-    LayoutFlags = 0x1B,
     Height = 0x1C,
     CustomData = 0x1D,
     // App-specific properties

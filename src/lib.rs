@@ -66,7 +66,7 @@ pub use lexer::{Lexer, Token, TokenType};
 pub use preprocessor::{Preprocessor, preprocess_file};
 pub use module_context::{ModuleContext, ModuleGraph};
 pub use utils::{
-    clean_and_quote_value, parse_color, parse_layout_string, 
+    clean_and_quote_value, parse_color, 
     evaluate_expression, is_valid_identifier, VariableProcessor
 };
 
@@ -1285,11 +1285,6 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
             let string_index = state.add_string(cleaned_value.clone())?;
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::String, size: 1, value: vec![string_index] })
         }
-        PropertyId::LayoutFlags => {
-            // Parse layout value like "grow", "column start", "row start"
-            let layout_value = crate::utils::parse_layout_string(&cleaned_value)?;
-            Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Byte, size: 1, value: vec![layout_value] })
-        }
         PropertyId::Height | PropertyId::Width => {
             // Parse numeric value as u16 or percentage
             if let Ok(val) = cleaned_value.parse::<u16>() {
@@ -1586,11 +1581,6 @@ fn apply_style_properties_to_elements(state: &mut CompilerState) -> Result<()> {
                             if property.value_type == ValueType::Short && property.value.len() >= 2 {
                                 let height = u16::from_le_bytes([property.value[0], property.value[1]]);
                                 element.height = height;
-                            }
-                        },
-                        0x1A => { // PropertyId::LayoutFlags
-                            if property.value_type == ValueType::Byte && !property.value.is_empty() {
-                                element.layout = property.value[0];
                             }
                         },
                         _ => {} // Ignore other properties for now

@@ -589,69 +589,6 @@ pub fn parse_color(color_str: &str) -> Result<Color> {
     }
 }
 
-/// Parse layout string into layout byte
-pub fn parse_layout_string(layout_str: &str) -> Result<u8> {
-    use crate::types::*;
-    
-    let parts: Vec<&str> = layout_str.split_whitespace().collect();
-    let mut layout_byte = 0u8;
-    
-    let mut _direction_set = false;
-    
-    // Set default direction to column if not specified
-    if !parts.iter().any(|&p| matches!(p, "row" | "column" | "col" | "absolute")) {
-        layout_byte |= LAYOUT_DIRECTION_COLUMN;
-    }
-
-    for part in &parts {
-        match *part {
-            // Direction
-            "row" => {
-                layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ROW;
-                _direction_set = true;
-            }
-            "col" | "column" => {
-                layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_COLUMN;
-                _direction_set = true;
-            }
-            // Note: row_rev and col_rev are not supported by the renderer
-
-            // Alignment
-            "start" => {
-                layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_START;
-            }
-            "center" | "centre" => {
-                layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_CENTER;
-            }
-            "end" => {
-                layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_END;
-            }
-            "space_between" | "space-between" => {
-                layout_byte = (layout_byte & !LAYOUT_ALIGNMENT_MASK) | LAYOUT_ALIGNMENT_SPACE_BETWEEN;
-            }
-
-            // Special layout type
-            "absolute" => {
-                layout_byte = (layout_byte & !LAYOUT_DIRECTION_MASK) | LAYOUT_DIRECTION_ABSOLUTE;
-                _direction_set = true;
-            }
-
-            // Flags
-            "wrap" => layout_byte |= LAYOUT_WRAP_BIT,
-            "grow" => layout_byte |= LAYOUT_GROW_BIT,
-
-            // Ignore unknown parts
-            _ => {
-                // Return an error for unknown layout parts
-                return Err(CompilerError::InvalidFormat {
-                    message: format!("Unknown layout value: '{}'", part),
-                });
-            }
-        }
-    }
-    
-    Ok(layout_byte)
-}
 
 /// Guess resource type from property key
 pub fn guess_resource_type(key: &str) -> crate::types::ResourceType {
@@ -834,17 +771,6 @@ mod tests {
         assert_eq!(color.a, 0x78);
     }
     
-    #[test]
-    fn test_parse_layout_string() {
-        assert_eq!(parse_layout_string("row center").unwrap(), 
-                   LAYOUT_DIRECTION_ROW | LAYOUT_ALIGNMENT_CENTER);
-        assert_eq!(parse_layout_string("column start grow").unwrap(), 
-                   LAYOUT_DIRECTION_COLUMN | LAYOUT_ALIGNMENT_START | LAYOUT_GROW_BIT);
-        assert_eq!(parse_layout_string("absolute").unwrap(), 
-                   LAYOUT_DIRECTION_ABSOLUTE);
-        assert_eq!(parse_layout_string("absolute center").unwrap(), 
-                   LAYOUT_DIRECTION_ABSOLUTE | LAYOUT_ALIGNMENT_CENTER);
-    }
     
     #[test]
     fn test_evaluate_expression() {

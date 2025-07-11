@@ -386,16 +386,6 @@ impl StyleResolver {
                     ));
                 }
             }
-            PropertyId::LayoutFlags => {
-                // Handle layout property (e.g., "row center", "column start")
-                let layout_byte = crate::utils::parse_layout_string(&cleaned_value)?;
-                Some(KrbProperty {
-                    property_id: property_id as u8,
-                    value_type: ValueType::Byte,
-                    size: 1,
-                    value: vec![layout_byte],
-                })
-            }
             PropertyId::Invalid => None, // Skip invalid properties
             _ => {
                 // For other properties, store as string for now
