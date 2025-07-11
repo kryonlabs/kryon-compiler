@@ -224,6 +224,7 @@ impl PropertyId {
             "height" => PropertyId::Height,                        // 0x1C
             "cursor" => PropertyId::Cursor,                        // 0x29
             "checked" => PropertyId::Checked,                      // 0x2A
+            "type" => PropertyId::InputType,                       // 0x2B
             
             // App-specific properties (0x20-0x28)
             "window_width" => PropertyId::WindowWidth,             // 0x20
@@ -366,6 +367,7 @@ pub enum PropertyId {
     Author = 0x28,
     Cursor = 0x29,
     Checked = 0x2A,
+    InputType = 0x2B,
     
     // CSS Grid Properties (0x60-0x6F - matching renderer PropertyRegistry)
     GridTemplateColumns = 0x60,
