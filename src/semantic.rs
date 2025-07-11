@@ -311,8 +311,13 @@ impl SemanticAnalyzer {
             let elem_type = ElementType::from_name(element_type);
             
             // Validate properties for this element type
-            for prop in properties {
+            for prop in properties.iter_mut() {
                 self.validate_property(element_type, prop, state)?;
+            }
+            
+            // Special validation for Input elements with type-specific property validation
+            if element_type == "Input" {
+                self.validate_input_element_properties(properties)?;
             }
             
             // Validate parent-child relationships
@@ -605,22 +610,233 @@ impl SemanticAnalyzer {
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
-            "position" | "top" | "right" | "bottom" | "left" | "inset"
+            "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            // Box model properties
+            "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
+            "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
+            "border_top_width" | "border_right_width" | "border_bottom_width" | "border_left_width" |
+            "border_top_color" | "border_right_color" | "border_bottom_color" | "border_left_color" |
+            "border_top_left_radius" | "border_top_right_radius" | "border_bottom_right_radius" | "border_bottom_left_radius" |
+            "box_sizing" | "outline" | "outline_color" | "outline_width" | "outline_offset"
         )
     }
     
     fn is_valid_button_property(&self, key: &str) -> bool {
         self.is_valid_text_property(key) || matches!(key,
             "disabled" | "onClick" | "onPress" | "onRelease" | "onHover" |
-            "onFocus" | "onBlur" | "cursor" | "checked"
+            "onFocus" | "onBlur" | "cursor" | "checked" |
+            // Box model properties
+            "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
+            "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
+            "border_top_width" | "border_right_width" | "border_bottom_width" | "border_left_width" |
+            "border_top_color" | "border_right_color" | "border_bottom_color" | "border_left_color" |
+            "border_top_left_radius" | "border_top_right_radius" | "border_bottom_right_radius" | "border_bottom_left_radius" |
+            "box_sizing" | "outline" | "outline_color" | "outline_width" | "outline_offset"
         )
     }
     
     fn is_valid_input_property(&self, key: &str) -> bool {
+        // For the basic property validation, allow all potential input properties
+        // Type-specific validation is handled separately in validate_input_element_properties
         self.is_valid_text_property(key) || matches!(key,
-            "placeholder" | "value" | "onChange" | "onSubmit" | "type" |
-            "max_length" | "readonly" | "disabled"
+            // Core input properties
+            "type" | "value" | "placeholder" | "disabled" | "readonly" |
+            
+            // Event handlers
+            "onChange" | "onSubmit" | "onFocus" | "onBlur" | "onClick" |
+            
+            // Textual input properties
+            "max_length" | "min_length" | "pattern" |
+            
+            // Selection input properties  
+            "checked" | "name" | "text" |
+            
+            // Range/number input properties
+            "min" | "max" | "step" |
+            
+            // File input properties
+            "accept" | "multiple" |
+            
+            // Image input properties
+            "src" | "alt"
         )
+    }
+    
+    /// Comprehensive validation for Input elements based on their type attribute
+    fn validate_input_element_properties(&self, properties: &[AstProperty]) -> Result<()> {
+        // Find the type property to determine input type
+        let input_type = self.get_input_type_from_properties(properties);
+        
+        // Validate each property against the determined input type
+        for prop in properties {
+            if !self.is_property_valid_for_input_type(&prop.key, input_type) {
+                return Err(CompilerError::semantic_legacy(
+                    prop.line,
+                    format!(
+                        "Property '{}' is not valid for Input type '{}'. Valid properties for this type are: {}",
+                        prop.key,
+                        input_type.to_name(),
+                        self.get_valid_properties_for_input_type(input_type).join(", ")
+                    )
+                ));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Extract the input type from the element's properties, defaulting to "text"
+    fn get_input_type_from_properties(&self, properties: &[AstProperty]) -> InputType {
+        for prop in properties {
+            if prop.key == "type" {
+                if let PropertyValue::String(type_str) = &prop.value {
+                    if let Some(input_type) = InputType::from_name(type_str) {
+                        return input_type;
+                    }
+                }
+            }
+        }
+        InputType::default() // Default to "text"
+    }
+    
+    /// Check if a property is valid for a specific input type
+    fn is_property_valid_for_input_type(&self, property: &str, input_type: InputType) -> bool {
+        // Common properties valid for all input types
+        let is_common_property = matches!(property,
+            "type" | "id" | "style" | "disabled" | "visible" | "width" | "height" |
+            "padding" | "margin" | "background_color" | "border_color" | "border_width" |
+            "border_radius" | "opacity" | "z_index" | "layout" | "pos_x" | "pos_y" |
+            "onClick" | "onFocus" | "onBlur" | "onHover" | "onPress" | "onRelease" |
+            // Box model properties
+            "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
+            "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
+            "border_top_width" | "border_right_width" | "border_bottom_width" | "border_left_width" |
+            "border_top_color" | "border_right_color" | "border_bottom_color" | "border_left_color" |
+            "border_top_left_radius" | "border_top_right_radius" | "border_bottom_right_radius" | "border_bottom_left_radius" |
+            "box_sizing" | "outline" | "outline_color" | "outline_width" | "outline_offset" |
+            // Layout properties
+            "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
+            "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
+            "position" | "top" | "right" | "bottom" | "left" | "inset"
+        );
+        
+        if is_common_property {
+            return true;
+        }
+        
+        // Type-specific property validation
+        match input_type {
+            InputType::Text | InputType::Password | InputType::Email | 
+            InputType::Number | InputType::Tel | InputType::Url | InputType::Search => {
+                matches!(property,
+                    "value" | "placeholder" | "max_length" | "min_length" | "readonly" | 
+                    "pattern" | "onChange" | "onSubmit"
+                ) || (input_type == InputType::Number && matches!(property, "min" | "max" | "step"))
+            }
+            
+            InputType::Checkbox | InputType::Radio => {
+                matches!(property,
+                    "checked" | "value" | "name" | "text" | "onChange"
+                )
+            }
+            
+            InputType::Range => {
+                matches!(property,
+                    "value" | "min" | "max" | "step" | "onChange"
+                )
+            }
+            
+            InputType::Date | InputType::DatetimeLocal | InputType::Month | 
+            InputType::Time | InputType::Week => {
+                matches!(property,
+                    "value" | "min" | "max" | "step" | "readonly" | "onChange"
+                )
+            }
+            
+            InputType::Color => {
+                matches!(property,
+                    "value" | "onChange"
+                )
+            }
+            
+            InputType::File => {
+                matches!(property,
+                    "accept" | "multiple" | "onChange"
+                )
+            }
+            
+            InputType::Hidden => {
+                matches!(property, "value")
+            }
+            
+            InputType::Submit | InputType::Reset | InputType::Button => {
+                matches!(property,
+                    "value" | "onClick"
+                )
+            }
+            
+            InputType::Image => {
+                matches!(property,
+                    "src" | "alt" | "value" | "onClick"
+                )
+            }
+        }
+    }
+    
+    /// Get list of valid properties for an input type (for error messages)
+    fn get_valid_properties_for_input_type(&self, input_type: InputType) -> Vec<&'static str> {
+        let mut props = vec![
+            "type", "id", "style", "disabled", "visible", "width", "height",
+            "padding", "margin", "background_color", "border_color", "border_width",
+            "border_radius", "opacity", "z_index", "layout",
+            "onClick", "onFocus", "onBlur", "onHover"
+        ];
+        
+        match input_type {
+            InputType::Text | InputType::Password | InputType::Email | 
+            InputType::Tel | InputType::Url | InputType::Search => {
+                props.extend(&["value", "placeholder", "max_length", "min_length", "readonly", "pattern", "onChange", "onSubmit"]);
+            }
+            
+            InputType::Number => {
+                props.extend(&["value", "placeholder", "min", "max", "step", "readonly", "onChange", "onSubmit"]);
+            }
+            
+            InputType::Checkbox | InputType::Radio => {
+                props.extend(&["checked", "value", "name", "text", "onChange"]);
+            }
+            
+            InputType::Range => {
+                props.extend(&["value", "min", "max", "step", "onChange"]);
+            }
+            
+            InputType::Date | InputType::DatetimeLocal | InputType::Month | 
+            InputType::Time | InputType::Week => {
+                props.extend(&["value", "min", "max", "step", "readonly", "onChange"]);
+            }
+            
+            InputType::Color => {
+                props.extend(&["value", "onChange"]);
+            }
+            
+            InputType::File => {
+                props.extend(&["accept", "multiple", "onChange"]);
+            }
+            
+            InputType::Hidden => {
+                props.extend(&["value"]);
+            }
+            
+            InputType::Submit | InputType::Reset | InputType::Button => {
+                props.extend(&["value", "onClick"]);
+            }
+            
+            InputType::Image => {
+                props.extend(&["src", "alt", "value", "onClick"]);
+            }
+        }
+        
+        props
     }
     
     fn is_valid_image_property(&self, key: &str) -> bool {
@@ -633,7 +849,14 @@ impl SemanticAnalyzer {
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
-            "position" | "top" | "right" | "bottom" | "left" | "inset"
+            "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            // Box model properties
+            "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
+            "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
+            "border_top_width" | "border_right_width" | "border_bottom_width" | "border_left_width" |
+            "border_top_color" | "border_right_color" | "border_bottom_color" | "border_left_color" |
+            "border_top_left_radius" | "border_top_right_radius" | "border_bottom_right_radius" | "border_bottom_left_radius" |
+            "box_sizing" | "outline" | "outline_color" | "outline_width" | "outline_offset"
         )
     }
     
@@ -649,7 +872,14 @@ impl SemanticAnalyzer {
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
             "position" | "top" | "right" | "bottom" | "left" | "inset" |
-            "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row"
+            "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row" |
+            // Box model properties
+            "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
+            "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
+            "border_top_width" | "border_right_width" | "border_bottom_width" | "border_left_width" |
+            "border_top_color" | "border_right_color" | "border_bottom_color" | "border_left_color" |
+            "border_top_left_radius" | "border_top_right_radius" | "border_bottom_right_radius" | "border_bottom_left_radius" |
+            "box_sizing" | "outline" | "outline_color" | "outline_width" | "outline_offset"
         )
     }
     
@@ -678,8 +908,7 @@ impl SemanticAnalyzer {
             // Image element aliases
             ("Image", "x") => "pos_x".to_string(),
             ("Image", "y") => "pos_y".to_string(),
-            ("Image", "src") => "source".to_string(),
-            ("Image", "url") => "source".to_string(),
+            ("Image", "url") => "src".to_string(),
             
             // App element aliases  
             ("App", "title") => "window_title".to_string(),
