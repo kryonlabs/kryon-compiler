@@ -36,9 +36,6 @@ pub enum ElementType {
     Canvas = 0x04,
     Button = 0x10,
     Input = 0x11,
-    Checkbox = 0x12,
-    Radio = 0x13,
-    Slider = 0x14,
     List = 0x20,
     Grid = 0x21,
     Scrollable = 0x22,
@@ -59,9 +56,6 @@ impl ElementType {
             "Canvas" => Self::Canvas,
             "Button" => Self::Button,
             "Input" => Self::Input,
-            "Checkbox" => Self::Checkbox,
-            "Radio" => Self::Radio,
-            "Slider" => Self::Slider,
             "List" => Self::List,
             "Grid" => Self::Grid,
             "Scrollable" => Self::Scrollable,
@@ -69,6 +63,130 @@ impl ElementType {
             "Video" => Self::Video,
             _ => Self::Unknown,
         }
+    }
+}
+
+// Input Types for the unified Input element
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum InputType {
+    // Textual inputs
+    Text = 0x00,           // Default type
+    Password = 0x01,
+    Email = 0x02,
+    Number = 0x03,
+    Tel = 0x04,
+    Url = 0x05,
+    Search = 0x06,
+    
+    // Selection inputs
+    Checkbox = 0x10,
+    Radio = 0x11,
+    
+    // Range input
+    Range = 0x20,
+    
+    // Date and time inputs
+    Date = 0x30,
+    DatetimeLocal = 0x31,
+    Month = 0x32,
+    Time = 0x33,
+    Week = 0x34,
+    
+    // Specialized inputs
+    Color = 0x40,
+    File = 0x41,
+    Hidden = 0x42,
+    
+    // Button inputs
+    Submit = 0x50,
+    Reset = 0x51,
+    Button = 0x52,
+    Image = 0x53,
+}
+
+impl InputType {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "text" => Some(Self::Text),
+            "password" => Some(Self::Password),
+            "email" => Some(Self::Email),
+            "number" => Some(Self::Number),
+            "tel" => Some(Self::Tel),
+            "url" => Some(Self::Url),
+            "search" => Some(Self::Search),
+            "checkbox" => Some(Self::Checkbox),
+            "radio" => Some(Self::Radio),
+            "range" => Some(Self::Range),
+            "date" => Some(Self::Date),
+            "datetime-local" => Some(Self::DatetimeLocal),
+            "month" => Some(Self::Month),
+            "time" => Some(Self::Time),
+            "week" => Some(Self::Week),
+            "color" => Some(Self::Color),
+            "file" => Some(Self::File),
+            "hidden" => Some(Self::Hidden),
+            "submit" => Some(Self::Submit),
+            "reset" => Some(Self::Reset),
+            "button" => Some(Self::Button),
+            "image" => Some(Self::Image),
+            _ => None,
+        }
+    }
+    
+    pub fn to_name(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Password => "password",
+            Self::Email => "email",
+            Self::Number => "number",
+            Self::Tel => "tel",
+            Self::Url => "url",
+            Self::Search => "search",
+            Self::Checkbox => "checkbox",
+            Self::Radio => "radio",
+            Self::Range => "range",
+            Self::Date => "date",
+            Self::DatetimeLocal => "datetime-local",
+            Self::Month => "month",
+            Self::Time => "time",
+            Self::Week => "week",
+            Self::Color => "color",
+            Self::File => "file",
+            Self::Hidden => "hidden",
+            Self::Submit => "submit",
+            Self::Reset => "reset",
+            Self::Button => "button",
+            Self::Image => "image",
+        }
+    }
+    
+    /// Returns true if this input type supports textual input
+    pub fn is_textual(self) -> bool {
+        matches!(self, Self::Text | Self::Password | Self::Email | 
+                      Self::Number | Self::Tel | Self::Url | Self::Search)
+    }
+    
+    /// Returns true if this input type is a selection control
+    pub fn is_selection(self) -> bool {
+        matches!(self, Self::Checkbox | Self::Radio)
+    }
+    
+    /// Returns true if this input type supports min/max/step properties
+    pub fn supports_range(self) -> bool {
+        matches!(self, Self::Number | Self::Range | Self::Date | 
+                      Self::DatetimeLocal | Self::Month | Self::Time | Self::Week)
+    }
+    
+    /// Returns true if this input type supports the checked property
+    pub fn supports_checked(self) -> bool {
+        matches!(self, Self::Checkbox | Self::Radio)
+    }
+}
+
+impl Default for InputType {
+    fn default() -> Self {
+        Self::Text
     }
 }
 
@@ -118,17 +236,23 @@ impl PropertyId {
             "version" => PropertyId::Version,                      // 0x27
             "author" => PropertyId::Author,                        // 0x28
             
-            // CSS Grid Properties (0x30-0x3F)
-            "grid_template_columns" | "grid-template-columns" => PropertyId::GridTemplateColumns, // 0x30
-            "grid_template_rows" | "grid-template-rows" => PropertyId::GridTemplateRows,           // 0x31
-            "grid_column" | "grid-column" => PropertyId::GridColumn,                               // 0x32
-            "grid_row" | "grid-row" => PropertyId::GridRow,                                        // 0x33
-            "grid_area" | "grid-area" => PropertyId::GridArea,                                     // 0x34
-            "grid_column_gap" | "grid-column-gap" | "column_gap" => PropertyId::GridColumnGap,    // 0x35
-            "grid_row_gap" | "grid-row-gap" | "row_gap" => PropertyId::GridRowGap,                // 0x36
-            "grid_auto_flow" | "grid-auto-flow" => PropertyId::GridAutoFlow,                      // 0x37
-            "grid_auto_columns" | "grid-auto-columns" => PropertyId::GridAutoColumns,             // 0x38
-            "grid_auto_rows" | "grid-auto-rows" => PropertyId::GridAutoRows,                      // 0x39
+            // CSS Grid Properties (0x60-0x6F - matching renderer PropertyRegistry)
+            "grid_template_columns" | "grid-template-columns" => PropertyId::GridTemplateColumns, // 0x60
+            "grid_template_rows" | "grid-template-rows" => PropertyId::GridTemplateRows,           // 0x61
+            "grid_template_areas" | "grid-template-areas" => PropertyId::GridTemplateAreas,       // 0x62
+            "grid_auto_columns" | "grid-auto-columns" => PropertyId::GridAutoColumns,             // 0x63
+            "grid_auto_rows" | "grid-auto-rows" => PropertyId::GridAutoRows,                      // 0x64
+            "grid_auto_flow" | "grid-auto-flow" => PropertyId::GridAutoFlow,                      // 0x65
+            "grid_area" | "grid-area" => PropertyId::GridArea,                                     // 0x66
+            "grid_column" | "grid-column" => PropertyId::GridColumn,                               // 0x67
+            "grid_row" | "grid-row" => PropertyId::GridRow,                                        // 0x68
+            "grid_column_start" | "grid-column-start" => PropertyId::GridColumnStart,             // 0x69
+            "grid_column_end" | "grid-column-end" => PropertyId::GridColumnEnd,                   // 0x6A
+            "grid_row_start" | "grid-row-start" => PropertyId::GridRowStart,                      // 0x6B
+            "grid_row_end" | "grid-row-end" => PropertyId::GridRowEnd,                            // 0x6C
+            "grid_gap" | "grid-gap" => PropertyId::GridGap,                                        // 0x6D
+            "grid_column_gap" | "grid-column-gap" | "column_gap" => PropertyId::GridColumnGap,    // 0x6E
+            "grid_row_gap" | "grid-row-gap" | "row_gap" => PropertyId::GridRowGap,                // 0x6F
             
             // Modern Flexbox Properties (0x40-0x4F)
             "display" => PropertyId::Display,                                                     // 0x40
@@ -143,6 +267,7 @@ impl PropertyId {
             "justify_content" | "justify-content" => PropertyId::JustifyContent,                  // 0x49
             "justify_items" | "justify-items" => PropertyId::JustifyItems,                        // 0x4A
             "justify_self" | "justify-self" => PropertyId::JustifySelf,                           // 0x4B
+            "order" => PropertyId::Order,                                                          // 0x4C
             
             // Positioning Properties (0x50-0x5F)
             "position" => PropertyId::Position,                                                    // 0x50
@@ -152,10 +277,37 @@ impl PropertyId {
             "left" => PropertyId::Left,                                                            // 0x54
             "inset" => PropertyId::Inset,                                                          // 0x55
             
-            // Sizing Properties (0x60-0x6F)
-            "min_size" | "min-size" => PropertyId::MinSize,                                       // 0x60
-            "max_size" | "max-size" => PropertyId::MaxSize,                                       // 0x61
-            "preferred_size" | "preferred-size" => PropertyId::PreferredSize,                     // 0x62
+            // Box Model Properties (0x70-0x8F)
+            "padding_top" | "padding-top" => PropertyId::PaddingTop,                             // 0x71
+            "padding_right" | "padding-right" => PropertyId::PaddingRight,                       // 0x72
+            "padding_bottom" | "padding-bottom" => PropertyId::PaddingBottom,                    // 0x73
+            "padding_left" | "padding-left" => PropertyId::PaddingLeft,                          // 0x74
+            "margin_top" | "margin-top" => PropertyId::MarginTop,                                // 0x76
+            "margin_right" | "margin-right" => PropertyId::MarginRight,                          // 0x77
+            "margin_bottom" | "margin-bottom" => PropertyId::MarginBottom,                       // 0x78
+            "margin_left" | "margin-left" => PropertyId::MarginLeft,                             // 0x79
+            "border_top_width" | "border-top-width" => PropertyId::BorderTopWidth,               // 0x7A
+            "border_right_width" | "border-right-width" => PropertyId::BorderRightWidth,         // 0x7B
+            "border_bottom_width" | "border-bottom-width" => PropertyId::BorderBottomWidth,      // 0x7C
+            "border_left_width" | "border-left-width" => PropertyId::BorderLeftWidth,            // 0x7D
+            "border_top_color" | "border-top-color" => PropertyId::BorderTopColor,               // 0x7E
+            "border_right_color" | "border-right-color" => PropertyId::BorderRightColor,         // 0x7F
+            "border_bottom_color" | "border-bottom-color" => PropertyId::BorderBottomColor,      // 0x80
+            "border_left_color" | "border-left-color" => PropertyId::BorderLeftColor,            // 0x81
+            "border_top_left_radius" | "border-top-left-radius" => PropertyId::BorderTopLeftRadius,        // 0x82
+            "border_top_right_radius" | "border-top-right-radius" => PropertyId::BorderTopRightRadius,     // 0x83
+            "border_bottom_right_radius" | "border-bottom-right-radius" => PropertyId::BorderBottomRightRadius, // 0x84
+            "border_bottom_left_radius" | "border-bottom-left-radius" => PropertyId::BorderBottomLeftRadius,     // 0x85
+            "box_sizing" | "box-sizing" => PropertyId::BoxSizing,                                // 0x86
+            "outline" => PropertyId::Outline,                                                     // 0x87
+            "outline_color" | "outline-color" => PropertyId::OutlineColor,                       // 0x88
+            "outline_width" | "outline-width" => PropertyId::OutlineWidth,                       // 0x89
+            "outline_offset" | "outline-offset" => PropertyId::OutlineOffset,                    // 0x8A
+            
+            // Sizing Properties (0x90-0x9F)
+            "min_size" | "min-size" => PropertyId::MinSize,                                       // 0x90
+            "max_size" | "max-size" => PropertyId::MaxSize,                                       // 0x91
+            "preferred_size" | "preferred-size" => PropertyId::PreferredSize,                     // 0x92
             
             _ => PropertyId::CustomData,
         }
@@ -215,17 +367,50 @@ pub enum PropertyId {
     Cursor = 0x29,
     Checked = 0x2A,
     
-    // Taffy CSS Grid Properties (0x30-0x3F)
-    GridTemplateColumns = 0x30,
-    GridTemplateRows = 0x31,
-    GridColumn = 0x32,
-    GridRow = 0x33,
-    GridArea = 0x34,
-    GridColumnGap = 0x35,
-    GridRowGap = 0x36,
-    GridAutoFlow = 0x37,
-    GridAutoColumns = 0x38,
-    GridAutoRows = 0x39,
+    // CSS Grid Properties (0x60-0x6F - matching renderer PropertyRegistry)
+    GridTemplateColumns = 0x60,
+    GridTemplateRows = 0x61,
+    GridTemplateAreas = 0x62,
+    GridAutoColumns = 0x63,
+    GridAutoRows = 0x64,
+    GridAutoFlow = 0x65,
+    GridArea = 0x66,
+    GridColumn = 0x67,
+    GridRow = 0x68,
+    GridColumnStart = 0x69,
+    GridColumnEnd = 0x6A,
+    GridRowStart = 0x6B,
+    GridRowEnd = 0x6C,
+    GridGap = 0x6D,
+    GridColumnGap = 0x6E,
+    GridRowGap = 0x6F,
+    
+    // Box Model Properties (0x70-0x8F)
+    PaddingTop = 0x71,
+    PaddingRight = 0x72,
+    PaddingBottom = 0x73,
+    PaddingLeft = 0x74,
+    MarginTop = 0x76,
+    MarginRight = 0x77,
+    MarginBottom = 0x78,
+    MarginLeft = 0x79,
+    BorderTopWidth = 0x7A,
+    BorderRightWidth = 0x7B,
+    BorderBottomWidth = 0x7C,
+    BorderLeftWidth = 0x7D,
+    BorderTopColor = 0x7E,
+    BorderRightColor = 0x7F,
+    BorderBottomColor = 0x80,
+    BorderLeftColor = 0x81,
+    BorderTopLeftRadius = 0x82,
+    BorderTopRightRadius = 0x83,
+    BorderBottomRightRadius = 0x84,
+    BorderBottomLeftRadius = 0x85,
+    BoxSizing = 0x86,
+    Outline = 0x87,
+    OutlineColor = 0x88,
+    OutlineWidth = 0x89,
+    OutlineOffset = 0x8A,
     
     // Taffy Modern Flexbox Properties (0x40-0x4F)
     Display = 0x40,
@@ -240,6 +425,7 @@ pub enum PropertyId {
     JustifyContent = 0x49,
     JustifyItems = 0x4A,
     JustifySelf = 0x4B,
+    Order = 0x4C,
     
     // Taffy Positioning Properties (0x50-0x5F)
     Position = 0x50,
@@ -249,10 +435,10 @@ pub enum PropertyId {
     Left = 0x54,
     Inset = 0x55,
     
-    // Taffy Sizing Properties (0x60-0x6F)
-    MinSize = 0x60,
-    MaxSize = 0x61,
-    PreferredSize = 0x62,
+    // Taffy Sizing Properties (0x90-0x9F)
+    MinSize = 0x90,
+    MaxSize = 0x91,
+    PreferredSize = 0x92,
 }
 
 // Value Types
