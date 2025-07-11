@@ -1334,6 +1334,23 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid float value for {}: {}", ast_prop.key, cleaned_value)));
             }
         }
+        PropertyId::InputType => {
+            // Parse the input type string and convert to InputType enum value
+            let input_type_value = if let Some(input_type) = crate::types::InputType::from_name(&cleaned_value) {
+                input_type as u8
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line, 
+                    format!("Invalid input type: '{}'. Valid types are: text, password, email, number, tel, url, search, checkbox, radio, range, date, datetime-local, month, time, week, color, file, hidden, submit, reset, button, image", cleaned_value)
+                ));
+            };
+            Some(KrbProperty { 
+                property_id: property_id as u8, 
+                value_type: ValueType::Enum, 
+                size: 1, 
+                value: vec![input_type_value] 
+            })
+        }
         _ => None, // Should not be reached due to the initial match, but it's safe.
     };
     

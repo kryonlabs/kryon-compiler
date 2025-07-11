@@ -689,8 +689,10 @@ impl SemanticAnalyzer {
     fn get_input_type_from_properties(&self, properties: &[AstProperty]) -> InputType {
         for prop in properties {
             if prop.key == "type" {
-                if let PropertyValue::String(type_str) = &prop.value {
-                    if let Some(input_type) = InputType::from_name(type_str) {
+                if let PropertyValue::String(_) = &prop.value {
+                    // Use cleaned_value to remove quotes
+                    let cleaned_type = prop.cleaned_value();
+                    if let Some(input_type) = InputType::from_name(&cleaned_type) {
                         return input_type;
                     }
                 }
