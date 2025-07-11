@@ -585,6 +585,9 @@ impl SemanticAnalyzer {
 
     fn is_valid_app_property(&self, key: &str) -> bool {
         matches!(key,
+            // Basic size and title properties
+            "width" | "height" | "title" |
+            // Window-specific properties
             "window_title" | "window_width" | "window_height" | "window_min_width" |
             "window_min_height" | "window_max_width" | "window_max_height" |
             "resizable" | "keep_aspect_ratio" | "scale_factor" | "icon" |
@@ -594,7 +597,11 @@ impl SemanticAnalyzer {
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
             "position" | "top" | "right" | "bottom" | "left" | "inset" |
             "min_size" | "max_size" | "preferred_size" | "gap" | "row_gap" | "column_gap" |
-            "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row"
+            "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row" |
+            // Box model properties
+            "padding" | "margin" | "border_width" | "border_color" | "border_radius" |
+            "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
+            "margin_top" | "margin_right" | "margin_bottom" | "margin_left"
         )
     }
     
@@ -640,7 +647,7 @@ impl SemanticAnalyzer {
         // Type-specific validation is handled separately in validate_input_element_properties
         self.is_valid_text_property(key) || matches!(key,
             // Core input properties
-            "type" | "value" | "placeholder" | "disabled" | "readonly" |
+            "type" | "value" | "placeholder" | "disabled" | "readonly" | "required" |
             
             // Event handlers
             "onChange" | "onSubmit" | "onFocus" | "onBlur" | "onClick" |
@@ -658,7 +665,10 @@ impl SemanticAnalyzer {
             "accept" | "multiple" |
             
             // Image input properties
-            "src" | "alt"
+            "src" | "alt" |
+            
+            // Font and text styling properties for all inputs
+            "font_size" | "font_weight" | "font_family" | "text_color" | "color"
         )
     }
     
@@ -732,13 +742,15 @@ impl SemanticAnalyzer {
             InputType::Number | InputType::Tel | InputType::Url | InputType::Search => {
                 matches!(property,
                     "value" | "placeholder" | "max_length" | "min_length" | "readonly" | 
-                    "pattern" | "onChange" | "onSubmit"
+                    "pattern" | "required" | "onChange" | "onSubmit" |
+                    "font_size" | "font_weight" | "font_family" | "text_color" | "color"
                 ) || (input_type == InputType::Number && matches!(property, "min" | "max" | "step"))
             }
             
             InputType::Checkbox | InputType::Radio => {
                 matches!(property,
-                    "checked" | "value" | "name" | "text" | "onChange"
+                    "checked" | "value" | "name" | "text" | "onChange" |
+                    "font_size" | "font_weight" | "font_family" | "text_color" | "color"
                 )
             }
             
@@ -751,7 +763,8 @@ impl SemanticAnalyzer {
             InputType::Date | InputType::DatetimeLocal | InputType::Month | 
             InputType::Time | InputType::Week => {
                 matches!(property,
-                    "value" | "min" | "max" | "step" | "readonly" | "onChange"
+                    "value" | "min" | "max" | "step" | "readonly" | "onChange" |
+                    "font_size" | "font_weight" | "font_family" | "text_color" | "color"
                 )
             }
             
