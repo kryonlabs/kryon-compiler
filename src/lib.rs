@@ -1351,6 +1351,16 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 value: vec![input_type_value] 
             })
         }
+        PropertyId::ImageSource => {
+            // Store image source path as string
+            let string_index = state.add_string(cleaned_value.clone())?;
+            Some(KrbProperty { 
+                property_id: property_id as u8, 
+                value_type: ValueType::String, 
+                size: 1, 
+                value: vec![string_index] 
+            })
+        }
         _ => None, // Should not be reached due to the initial match, but it's safe.
     };
     
