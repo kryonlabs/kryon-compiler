@@ -545,6 +545,8 @@ impl Parser {
                 properties = self.parse_component_properties()?;
             } else if self.check(&TokenType::Function) {
                 functions.push(self.parse_function()?);
+            } else if self.check(&TokenType::Script) {
+                functions.push(self.parse_script()?);
             } else if self.is_element_start() {
                 if template.is_some() {
                     return Err(CompilerError::parse_legacy(
@@ -556,7 +558,7 @@ impl Parser {
             } else {
                 return Err(CompilerError::parse_legacy(
                     self.peek().line,
-                    "Expected 'Properties' block, '@function', or template element in component"
+                    "Expected 'Properties' block, '@function', '@script', or template element in component"
                 ));
             }
         }
@@ -631,7 +633,10 @@ impl Parser {
             TokenType::App => "App".to_string(),
             TokenType::Container => "Container".to_string(),
             TokenType::Text => "Text".to_string(),
+            TokenType::Link => "Link".to_string(),
             TokenType::Image => "Image".to_string(),
+            TokenType::Canvas => "Canvas".to_string(),
+            TokenType::WasmView => "WasmView".to_string(),
             TokenType::Button => "Button".to_string(),
             TokenType::Input => "Input".to_string(),
             TokenType::Identifier(name) => name.clone(),
@@ -711,8 +716,11 @@ impl Parser {
             TokenType::Identifier(name) => name.clone(),
             // Allow keywords as property names
             TokenType::Style => "style".to_string(),
-            TokenType::Text => "text".to_string(), 
+            TokenType::Text => "text".to_string(),
+            TokenType::Link => "link".to_string(),
             TokenType::Image => "image".to_string(),
+            TokenType::Canvas => "canvas".to_string(),
+            TokenType::WasmView => "wasmview".to_string(),
             TokenType::Button => "button".to_string(),
             TokenType::Input => "input".to_string(),
             TokenType::Container => "container".to_string(),
@@ -821,18 +829,37 @@ impl Parser {
                 Ok(PropertyValue::Color(value))
             }
             TokenType::Dollar => {
-                // Handle ${variable} syntax
+                // Handle both $variable and ${variable} syntax
                 self.advance(); // consume '$'
-                self.consume(TokenType::LeftBrace, "Expected '{' after '$'")?;
-                if let TokenType::Identifier(var_name) = &self.advance().token_type {
-                    let value = var_name.clone();
-                    self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
-                    Ok(PropertyValue::Variable(value))
-                } else {
-                    Err(CompilerError::parse_legacy(
-                        self.previous().line,
-                        "Expected variable name in ${variable}"
-                    ))
+                
+                // Check if next token is '{' (for ${variable}) or an identifier (for $variable)
+                match &self.peek().token_type {
+                    TokenType::LeftBrace => {
+                        // Handle ${variable} syntax
+                        self.advance(); // consume '{'
+                        if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                            let value = var_name.clone();
+                            self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
+                            Ok(PropertyValue::Variable(value))
+                        } else {
+                            Err(CompilerError::parse_legacy(
+                                self.previous().line,
+                                "Expected variable name in ${variable}"
+                            ))
+                        }
+                    },
+                    TokenType::Identifier(var_name) => {
+                        // Handle $variable syntax
+                        let value = var_name.clone();
+                        self.advance(); // consume identifier
+                        Ok(PropertyValue::Variable(value))
+                    },
+                    _ => {
+                        Err(CompilerError::parse_legacy(
+                            self.peek().line,
+                            "Expected variable name after '$' (use $variable or ${variable})"
+                        ))
+                    }
                 }
             }
             TokenType::LeftBrace => {
@@ -942,7 +969,10 @@ impl Parser {
             // Allow keywords to be used as property names
             TokenType::Style => true,
             TokenType::Text => true,
+            TokenType::Link => true,
             TokenType::Image => true,
+            TokenType::Canvas => true,
+            TokenType::WasmView => true,
             TokenType::Button => true,
             TokenType::Input => true,
             TokenType::Container => true,
@@ -966,7 +996,7 @@ impl Parser {
         match &self.peek().token_type {
             // Known element types
             TokenType::App | TokenType::Container | TokenType::Text |
-            TokenType::Image | TokenType::Button | TokenType::Input => true,
+            TokenType::Link | TokenType::Image | TokenType::Canvas | TokenType::WasmView | TokenType::Button | TokenType::Input => true,
             
             // For identifiers, check if they're followed by an opening brace (element)
             // rather than a colon (property)
@@ -1065,23 +1095,35 @@ impl Parser {
                     self.advance();
                 }
                 TokenType::Dollar => {
-                    // Require ${var_name} syntax for variables in function names
+                    // Support both $var_name and ${var_name} syntax for variables in function names
                     self.advance(); // consume $
-                    if self.match_token(&TokenType::LeftBrace) {
-                        if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                    
+                    match &self.peek().token_type {
+                        TokenType::LeftBrace => {
+                            // Handle ${variable} syntax
+                            self.advance(); // consume '{'
+                            if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                                name_parts.push(format!("${}", var_name));
+                                self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
+                            } else {
+                                return Err(CompilerError::parse_legacy(
+                                    self.previous().line,
+                                    "Expected variable name after '${'",
+                                ));
+                            }
+                        },
+                        TokenType::Identifier(var_name) => {
+                            // Handle $variable syntax
+                            let var_name = var_name.clone();
                             name_parts.push(format!("${}", var_name));
-                            self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
-                        } else {
+                            self.advance(); // consume identifier
+                        },
+                        _ => {
                             return Err(CompilerError::parse_legacy(
-                                self.previous().line,
-                                "Expected variable name after '${'",
+                                self.peek().line,
+                                "Expected variable name after '$' (use $variable or ${variable})"
                             ));
                         }
-                    } else {
-                        return Err(CompilerError::parse_legacy(
-                            self.previous().line,
-                            "Function names require ${variable} syntax - use ${component_id} instead of $component_id",
-                        ));
                     }
                 }
                 TokenType::LeftParen => {
@@ -1221,18 +1263,37 @@ impl Parser {
                 Ok(Expression::Boolean(value))
             }
             TokenType::Dollar => {
-                // Handle ${variable} syntax in expressions
+                // Handle both $variable and ${variable} syntax in expressions
                 self.advance(); // consume '$'
-                self.consume(TokenType::LeftBrace, "Expected '{' after '$'")?;
-                if let TokenType::Identifier(var_name) = &self.advance().token_type {
-                    let value = var_name.clone();
-                    self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
-                    Ok(Expression::Variable(value))
-                } else {
-                    Err(CompilerError::parse_legacy(
-                        self.previous().line,
-                        "Expected variable name in ${variable}"
-                    ))
+                
+                // Check if next token is '{' (for ${variable}) or an identifier (for $variable)
+                match &self.peek().token_type {
+                    TokenType::LeftBrace => {
+                        // Handle ${variable} syntax
+                        self.advance(); // consume '{'
+                        if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                            let value = var_name.clone();
+                            self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
+                            Ok(Expression::Variable(value))
+                        } else {
+                            Err(CompilerError::parse_legacy(
+                                self.previous().line,
+                                "Expected variable name in ${variable}"
+                            ))
+                        }
+                    },
+                    TokenType::Identifier(var_name) => {
+                        // Handle $variable syntax
+                        let value = var_name.clone();
+                        self.advance(); // consume identifier
+                        Ok(Expression::Variable(value))
+                    },
+                    _ => {
+                        Err(CompilerError::parse_legacy(
+                            self.peek().line,
+                            "Expected variable name after '$' (use $variable or ${variable})"
+                        ))
+                    }
                 }
             }
             TokenType::LeftParen => {

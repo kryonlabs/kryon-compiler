@@ -10,13 +10,12 @@ pub enum TokenType {
     App,
     Container,
     Text,
+    Link,
     Image,
     Canvas,
+    WasmView,
     Button,
     Input,
-    Checkbox,
-    Radio,
-    Slider,
     List,
     Grid,
     Scrollable,
@@ -102,13 +101,12 @@ impl fmt::Display for TokenType {
             TokenType::App => write!(f, "App"),
             TokenType::Container => write!(f, "Container"),
             TokenType::Text => write!(f, "Text"),
+            TokenType::Link => write!(f, "Link"),
             TokenType::Image => write!(f, "Image"),
             TokenType::Canvas => write!(f, "Canvas"),
+            TokenType::WasmView => write!(f, "WasmView"),
             TokenType::Button => write!(f, "Button"),
             TokenType::Input => write!(f, "Input"),
-            TokenType::Checkbox => write!(f, "Checkbox"),
-            TokenType::Radio => write!(f, "Radio"),
-            TokenType::Slider => write!(f, "Slider"),
             TokenType::List => write!(f, "List"),
             TokenType::Grid => write!(f, "Grid"),
             TokenType::Scrollable => write!(f, "Scrollable"),
@@ -767,13 +765,12 @@ impl Lexer {
             "App" => TokenType::App,
             "Container" => TokenType::Container,
             "Text" => TokenType::Text,
+            "Link" => TokenType::Link,
             "Image" => TokenType::Image,
             "Canvas" => TokenType::Canvas,
+            "WasmView" => TokenType::WasmView,
             "Button" => TokenType::Button,
             "Input" => TokenType::Input,
-            "Checkbox" => TokenType::Checkbox,
-            "Radio" => TokenType::Radio,
-            "Slider" => TokenType::Slider,
             "List" => TokenType::List,
             "Grid" => TokenType::Grid,
             "Scrollable" => TokenType::Scrollable,
@@ -838,6 +835,7 @@ impl Lexer {
         }
         
         log::debug!("Successfully read script content: {} characters", content.len());
+        log::debug!("Script content: {}", content);
         Ok(content)
     }
 }
