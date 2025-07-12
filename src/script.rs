@@ -116,7 +116,7 @@ impl ScriptProcessor {
         }
     }
     
-    fn extract_entry_points(&self, language: ScriptLanguage, source: &ScriptSource) -> Result<Vec<String>> {
+    pub fn extract_entry_points(&self, language: ScriptLanguage, source: &ScriptSource) -> Result<Vec<String>> {
         let code = match source {
             ScriptSource::Inline(code) => code,
             ScriptSource::External(_) => return Ok(Vec::new()), // External scripts analyzed at runtime

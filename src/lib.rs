@@ -329,7 +329,7 @@ pub fn compile_with_module_graph(
     }
     
     let mut parser = Parser::new(tokens);
-    let mut ast = parser.parse()?;
+    let ast = parser.parse()?;
     
     if options.debug_mode {
         log::debug!("Phase 1 complete. AST parsed successfully");
@@ -357,7 +357,7 @@ fn compile_ast_with_state(
 ) -> Result<Vec<u8>> {
     use crate::semantic::SemanticAnalyzer;
     use crate::style_resolver::StyleResolver;
-    use crate::script::ScriptProcessor;
+    
     use crate::component_resolver::ComponentResolver;
     use crate::size_calculator::SizeCalculator;
     use crate::codegen::CodeGenerator;
@@ -386,28 +386,9 @@ fn compile_ast_with_state(
         log::debug!("Phase 1.25 complete. Style inheritance resolved");
     }
     
-    // Phase 1.3: Process scripts
+    // Phase 1.3: Convert AST to internal representation
     if options.debug_mode {
-        log::debug!("Phase 1.3: Processing scripts...");
-    }
-    
-    let script_processor = ScriptProcessor::new();
-    
-    // Extract scripts from AST and process them
-    if let AstNode::File { scripts, .. } = &ast {
-        for script_node in scripts {
-            let script_entry = script_processor.process_script(script_node, state)?;
-            state.scripts.push(script_entry);
-        }
-    }
-    
-    if options.debug_mode {
-        log::debug!("Phase 1.3 complete. Scripts processed: {}", state.scripts.len());
-    }
-    
-    // Phase 1.4: Convert AST to internal representation
-    if options.debug_mode {
-        log::debug!("Phase 1.4: Converting AST to internal representation...");
+        log::debug!("Phase 1.3: Converting AST to internal representation...");
     }
     
     convert_ast_to_state(&ast, state)?;
@@ -776,12 +757,22 @@ pub fn compile_source_with_options(
         log::debug!("Phase 1.3 complete. Function templates collected: {}", state.function_templates.len());
     }
     
-    // Phase 1.35: Resolve global function templates
+    // Phase 1.35: Resolve global function templates (skip for @function blocks)
     if options.debug_mode {
         log::debug!("Phase 1.35: Resolving global function templates...");
     }
     
-    resolve_global_function_templates(&mut state)?;
+    // Skip resolution if we have @function blocks that are already complete
+    let has_function_blocks = state.function_templates.iter()
+        .any(|t| t.body.trim().starts_with("function"));
+        
+    if !has_function_blocks {
+        resolve_global_function_templates(&mut state)?;
+    } else {
+        if options.debug_mode {
+            log::debug!("Skipping global function template resolution - @function blocks already complete");
+        }
+    }
     
     if options.debug_mode {
         log::debug!("Phase 1.35 complete. Global functions resolved: {}", 
@@ -1050,7 +1041,7 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
             
             // Process components
             for component_node in components {
-                if let AstNode::Component { name, properties, template, .. } = component_node {
+                if let AstNode::Component { name, properties,  .. } = component_node {
                     let mut component_def = ComponentDefinition {
                         name: name.clone(),
                         properties: Vec::new(),
@@ -1077,6 +1068,15 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
                     component_def.definition_root_element_index = None; // Not needed with AST templates
                     
                     state.component_defs.push(component_def);
+                }
+            }
+            
+            // Process scripts
+            for script_node in scripts {
+                if let AstNode::Script { language, name, source, .. } = script_node {
+                    let script_processor = crate::script::ScriptProcessor::new();
+                    let script_entry = script_processor.process_script(script_node, state)?;
+                    state.scripts.push(script_entry);
                 }
             }
             
@@ -1152,42 +1152,43 @@ fn convert_element_to_state(
                 // Each event is handled in its own, isolated block with explicit types.
                 "onClick" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    // Ensure the function name is added to the string table
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_CLICK, callback_id });
                 },
                 "onPress" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_PRESS, callback_id });
                 },
                 "onRelease" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_RELEASE, callback_id });
                 },
                 "onHover" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_HOVER, callback_id });
                 },
                 "onFocus" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_FOCUS, callback_id });
                 },
                 "onBlur" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_BLUR, callback_id });
                 },
                 "onChange" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_CHANGE, callback_id });
                 },
                 "onSubmit" => {
                     let func_name = ast_prop.cleaned_value();
-                    let callback_id = state.strings.iter().position(|s| s.text == func_name).map(|i| i as u8).unwrap_or(0);
+                    let callback_id = state.add_string(&func_name)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_SUBMIT, callback_id });
                 },
 
@@ -1938,15 +1939,16 @@ App {
 
 /// Collect function templates from AST (Phase 1.3)
 fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Result<()> {
-    use crate::types::{FunctionTemplate, FunctionScope, SourceLocation};
-    use std::collections::HashSet;
+    use crate::types::FunctionScope;
+    
     
     match ast {
         AstNode::File { scripts, components, .. } => {
-            // Collect global function templates
+            // Collect global function templates (including scripts associated with components)
             for script_node in scripts {
                 if let AstNode::Script { language, name, source, .. } = script_node {
                     if let Some(func_name) = name {
+                        // Named global function
                         let template = create_function_template(
                             func_name,
                             language,
@@ -1956,6 +1958,21 @@ fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Resul
                             state
                         )?;
                         state.function_templates.push(template);
+                    } else {
+                        // Unnamed global @script block - could be associated with a component
+                        // If we have components in this file, associate the script with the first component
+                        let scope = if !components.is_empty() {
+                            if let AstNode::Component { name: comp_name, .. } = &components[0] {
+                                FunctionScope::Component(comp_name.clone())
+                            } else {
+                                FunctionScope::Global
+                            }
+                        } else {
+                            FunctionScope::Global
+                        };
+                        
+                        // @script blocks should be processed as complete scripts, not as individual function templates
+                        // Skip function template creation for @script blocks - they will be handled in script processing phase
                     }
                 }
             }
@@ -1966,6 +1983,7 @@ fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Resul
                     for script_node in functions {
                         if let AstNode::Script { language, name, source, .. } = script_node {
                             if let Some(func_name) = name {
+                                // Named @function - create single template
                                 let template = create_function_template(
                                     func_name,
                                     language,
@@ -1975,6 +1993,9 @@ fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Resul
                                     state
                                 )?;
                                 state.function_templates.push(template);
+                            } else {
+                                // Unnamed @script block - process as complete script, not individual function templates
+                                // Skip function template creation for @script blocks - they will be handled in script processing phase
                             }
                         }
                     }
@@ -2063,12 +2084,18 @@ fn resolve_global_function_templates(state: &mut CompilerState) -> Result<()> {
             
             // Build complete function code
             let param_list = template.parameters.join(", ");
-            let code = format!(
-                "function {}({})\n{}\nend",
-                resolved_name,
-                param_list,
+            let code = if resolved_body.trim().starts_with("function") {
+                // Body already contains complete function, use as-is
                 resolved_body
-            );
+            } else {
+                // Body is just the content, wrap it with function declaration
+                format!(
+                    "function {}({})\n{}\nend",
+                    resolved_name,
+                    param_list,
+                    resolved_body
+                )
+            };
             
             let resolved_function = ResolvedFunction {
                 name: resolved_name.clone(),
@@ -2088,24 +2115,49 @@ fn resolve_global_function_templates(state: &mut CompilerState) -> Result<()> {
 
 /// Process resolved scripts into ScriptEntry format (Phase 1.7)
 fn process_resolved_scripts(state: &mut CompilerState) -> Result<()> {
-    use crate::script::ScriptProcessor;
-    use crate::ast::{AstNode, ScriptSource};
-    
-    let script_processor = ScriptProcessor::new();
+    use crate::types::{ScriptEntry, ScriptFunction, ScriptLanguage};
+    use crate::codegen::{ScriptStorageInline};
     
     // Collect resolved functions first to avoid borrowing issues
     let resolved_funcs: Vec<_> = state.resolved_functions.values().cloned().collect();
     
     // Process all resolved functions as script entries
     for resolved_func in resolved_funcs {
-        let script_node = AstNode::Script {
-            language: resolved_func.language.clone(),
-            name: Some(resolved_func.name.clone()),
-            source: ScriptSource::Inline(resolved_func.code.clone()),
-            mode: None,
+        // resolved_func.code already contains the complete function with declaration and end
+        // We need to convert it directly to ScriptEntry without re-processing
+        
+        let language_id = ScriptLanguage::from_name(&resolved_func.language)
+            .unwrap_or(ScriptLanguage::Lua);
+            
+        let name_index = state.add_string(&resolved_func.name)?;
+        
+        // Create script function entry point
+        let func_name_index = state.add_string(&resolved_func.name)?;
+        let script_function = ScriptFunction {
+            function_name: resolved_func.name.clone(),
+            function_name_index: func_name_index,
         };
         
-        let script_entry = script_processor.process_script(&script_node, state)?;
+        // Apply variable substitution to the already-complete function code
+        let substituted_code = state.variable_context.substitute_variables(&resolved_func.code)?;
+        let code_data = substituted_code.as_bytes().to_vec();
+        
+        let calculated_size = 6 + 1 + code_data.len() as u32; // header + entry point + code data
+        
+        let script_entry = ScriptEntry {
+            language_id,
+            name: resolved_func.name.clone(),
+            name_index,
+            storage_format: ScriptStorageInline,
+            entry_point_count: 1,
+            data_size: code_data.len() as u16,
+            code_data,
+            entry_points: vec![script_function],
+            resource_index: None,
+            calculated_size,
+            source_line_num: 0, // Not available for resolved functions
+        };
+        
         state.scripts.push(script_entry);
     }
     
