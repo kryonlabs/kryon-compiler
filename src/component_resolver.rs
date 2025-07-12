@@ -19,23 +19,25 @@ impl ComponentResolver {
     }
     
     /// Substitute variables in a string using the provided mapping
+    /// Only supports ${variable} syntax
     pub fn substitute_variables(&self, input: &str, mapping: &HashMap<String, String>) -> Result<String> {
         let mut result = input.to_string();
         
-        // Use regex to find $variable patterns
-        let re = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+        // Only support ${variable} syntax
+        let var_regex = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
         
-        for capture in re.captures_iter(input) {
+        // Process ${variable} syntax
+        for capture in var_regex.captures_iter(input) {
             if let Some(var_name) = capture.get(1) {
                 let var_name_str = var_name.as_str();
                 if let Some(value) = mapping.get(var_name_str) {
-                    let pattern = format!("${}", var_name_str);
+                    let pattern = format!("${{{}}}", var_name_str);
                     result = result.replace(&pattern, value);
                 } else {
                     return Err(CompilerError::Variable {
                         file: "test".to_string(),
                         line: 0,
-                        message: format!("Undefined variable: ${}", var_name_str),
+                        message: format!("Undefined variable: ${{{}}}", var_name_str),
                     });
                 }
             }
@@ -174,6 +176,9 @@ impl ComponentResolver {
             
             // Replace the component instance with the instantiated template
             *element = instantiated_template;
+            
+            // Resolve component function templates while in component scope
+            self.resolve_component_function_templates(&component_def.name, state)?;
             
             // Recursively resolve any nested components
             self.resolve_element_components(element, state)?;
@@ -442,6 +447,75 @@ impl ComponentResolver {
         }
         
         false
+    }
+    
+    /// Resolve component function templates with current variable context
+    fn resolve_component_function_templates(
+        &self, 
+        component_name: &str, 
+        state: &mut CompilerState
+    ) -> Result<()> {
+        use crate::types::{FunctionScope, ResolvedFunction};
+        
+        // Find all function templates for this component
+        let component_templates: Vec<_> = state.function_templates
+            .iter()
+            .filter(|template| {
+                matches!(&template.scope, FunctionScope::Component(name) if name == component_name)
+            })
+            .cloned()
+            .collect();
+        
+        for template in component_templates {
+            // Check if all required variables are available
+            let mut all_vars_available = true;
+            for var_name in &template.required_vars {
+                if !state.variable_context.has_variable(var_name) {
+                    all_vars_available = false;
+                    break;
+                }
+            }
+            
+            if !all_vars_available {
+                continue; // Skip this template
+            }
+            
+            // Resolve the template with current variable context
+            let resolved_name = state.variable_context.substitute_variables(&template.name_pattern)?;
+            let resolved_body = state.variable_context.substitute_variables(&template.body)?;
+            
+            // Build complete function code
+            let param_list = template.parameters.join(", ");
+            let code = format!(
+                "function {}({})\n{}\nend",
+                resolved_name,
+                param_list,
+                resolved_body
+            );
+            
+            // Create instance context identifier  
+            let instance_context = format!("{}:{}", component_name, resolved_name);
+            
+            let resolved_function = ResolvedFunction {
+                name: resolved_name.clone(),
+                code,
+                template_id: template.id,
+                instance_context: Some(instance_context.clone()),
+                language: template.language.clone(),
+                parameters: template.parameters.clone(),
+            };
+            
+            // Add to resolved functions
+            state.resolved_functions.insert(resolved_name.clone(), resolved_function);
+            
+            // Track component functions
+            state.component_functions
+                .entry(instance_context)
+                .or_insert_with(Vec::new)
+                .push(resolved_name);
+        }
+        
+        Ok(())
     }
 }
 

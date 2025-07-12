@@ -9,6 +9,7 @@
 use crate::error::{CompilerError, Result};
 use crate::types::*;
 use crate::module_context::ModuleContext;
+use crate::ast::Expression;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use regex::Regex;
@@ -172,17 +173,21 @@ impl VariableContext {
         None
     }
     
-    /// Substitute all $variable references in a string
+    /// Check if a variable exists in any scope
+    pub fn has_variable(&self, name: &str) -> bool {
+        self.get_variable(name).is_some()
+    }
+    
+    /// Substitute all ${variable} references in a string
     pub fn substitute_variables(&self, input: &str) -> Result<String> {
         let mut result = input.to_string();
         
-        // Use regex to find all $variable references
-        let var_regex = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)")
+        // Only support ${variable} syntax
+        let var_regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
             .map_err(|e| CompilerError::variable_legacy(0, format!("Regex error: {}", e)))?;
         
-        // Collect all matches first to avoid borrowing issues
+        // Process ${variable} syntax
         let matches: Vec<_> = var_regex.captures_iter(input).collect();
-        
         for captures in matches {
             if let Some(var_match) = captures.get(0) {
                 let var_name = &captures[1];
@@ -192,13 +197,95 @@ impl VariableContext {
                 } else {
                     return Err(CompilerError::variable_legacy(
                         0,
-                        format!("Undefined variable: ${}", var_name)
+                        format!("Undefined variable: ${{{}}}", var_name)
                     ));
                 }
             }
         }
         
         Ok(result)
+    }
+    
+    /// Evaluate an expression with variable substitution
+    pub fn evaluate_expression(&self, expr: &Expression) -> Result<String> {
+        match expr {
+            Expression::String(s) => Ok(s.clone()),
+            Expression::Number(n) => Ok(n.to_string()),
+            Expression::Integer(i) => Ok(i.to_string()),
+            Expression::Boolean(b) => Ok(b.to_string()),
+            Expression::Variable(var_name) => {
+                if let Some(var_entry) = self.get_variable(var_name) {
+                    Ok(var_entry.value.clone())
+                } else {
+                    Err(CompilerError::variable_legacy(
+                        0,
+                        format!("Undefined variable: ${}", var_name)
+                    ))
+                }
+            }
+            Expression::NotEquals(left, right) => {
+                let left_val = self.evaluate_expression(left)?;
+                let right_val = self.evaluate_expression(right)?;
+                Ok((left_val != right_val).to_string())
+            }
+            Expression::EqualEquals(left, right) => {
+                let left_val = self.evaluate_expression(left)?;
+                let right_val = self.evaluate_expression(right)?;
+                Ok((left_val == right_val).to_string())
+            }
+            Expression::LessThan(left, right) => {
+                let left_val = self.evaluate_expression(left)?;
+                let right_val = self.evaluate_expression(right)?;
+                // Try to parse as numbers for comparison
+                if let (Ok(left_num), Ok(right_num)) = (left_val.parse::<f64>(), right_val.parse::<f64>()) {
+                    Ok((left_num < right_num).to_string())
+                } else {
+                    Ok((left_val < right_val).to_string())
+                }
+            }
+            Expression::LessThanOrEqual(left, right) => {
+                let left_val = self.evaluate_expression(left)?;
+                let right_val = self.evaluate_expression(right)?;
+                if let (Ok(left_num), Ok(right_num)) = (left_val.parse::<f64>(), right_val.parse::<f64>()) {
+                    Ok((left_num <= right_num).to_string())
+                } else {
+                    Ok((left_val <= right_val).to_string())
+                }
+            }
+            Expression::GreaterThan(left, right) => {
+                let left_val = self.evaluate_expression(left)?;
+                let right_val = self.evaluate_expression(right)?;
+                if let (Ok(left_num), Ok(right_num)) = (left_val.parse::<f64>(), right_val.parse::<f64>()) {
+                    Ok((left_num > right_num).to_string())
+                } else {
+                    Ok((left_val > right_val).to_string())
+                }
+            }
+            Expression::GreaterThanOrEqual(left, right) => {
+                let left_val = self.evaluate_expression(left)?;
+                let right_val = self.evaluate_expression(right)?;
+                if let (Ok(left_num), Ok(right_num)) = (left_val.parse::<f64>(), right_val.parse::<f64>()) {
+                    Ok((left_num >= right_num).to_string())
+                } else {
+                    Ok((left_val >= right_val).to_string())
+                }
+            }
+            Expression::Ternary { condition, true_value, false_value } => {
+                let condition_result = self.evaluate_expression(condition)?;
+                let is_true = match condition_result.as_str() {
+                    "true" => true,
+                    "false" => false,
+                    "" => false, // Empty string is falsy
+                    _ => true,   // Non-empty string is truthy
+                };
+                
+                if is_true {
+                    self.evaluate_expression(true_value)
+                } else {
+                    self.evaluate_expression(false_value)
+                }
+            }
+        }
     }
     
     /// Get all variables in current scope (for debugging)

@@ -46,20 +46,25 @@ impl ScriptProcessor {
                     .ok_or_else(|| CompilerError::script_legacy(0, format!("Unsupported script language: {}", language)))?;
                 
                 let name_index = if let Some(n) = name {
-                    state.add_string(n)?
+                    // Apply variable substitution to the script name
+                    let substituted_name = state.variable_context.substitute_variables(n)?;
+                    state.add_string(&substituted_name)?
                 } else {
                     0
                 };
                 
-                let (storage_format, data_size, code_data, resource_index) = match source {
+                let (storage_format, data_size, code_data, resource_index, substituted_source) = match source {
                     ScriptSource::Inline(code) => {
+                        // Apply variable substitution to the script code
+                        let substituted_code = state.variable_context.substitute_variables(code)?;
+                        
                         let storage = if mode.as_deref() == Some("external") {
                             ScriptStorageExternal
                         } else {
                             ScriptStorageInline
                         };
                         
-                        (storage, code.len() as u16, code.as_bytes().to_vec(), None)
+                        (storage, substituted_code.len() as u16, substituted_code.as_bytes().to_vec(), None, ScriptSource::Inline(substituted_code))
                     }
                     ScriptSource::External(path) => {
                         let res_type = match language_id {
@@ -70,12 +75,12 @@ impl ScriptProcessor {
                         };
                         
                         let resource_idx = state.add_resource(res_type as u8, path)?;
-                        (ScriptStorageExternal, resource_idx as u16, Vec::new(), Some(resource_idx))
+                        (ScriptStorageExternal, resource_idx as u16, Vec::new(), Some(resource_idx), source.clone())
                     }
                 };
                 
-                // Extract entry points (function names)
-                let entry_points = self.extract_entry_points(language_id, source)?;
+                // Extract entry points (function names) from the substituted source
+                let entry_points = self.extract_entry_points(language_id, &substituted_source)?;
                 let mut script_functions = Vec::new();
                 
                 for func_name in entry_points {
@@ -91,7 +96,11 @@ impl ScriptProcessor {
 
                 Ok(ScriptEntry {
                     language_id,
-                    name: name.clone().unwrap_or_default(),
+                    name: if let Some(n) = name {
+                        state.variable_context.substitute_variables(n).unwrap_or_else(|_| n.clone())
+                    } else {
+                        String::new()
+                    },
                     name_index,
                     storage_format,
                     entry_point_count: script_functions.len() as u8,

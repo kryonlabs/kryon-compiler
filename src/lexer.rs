@@ -48,6 +48,17 @@ pub enum TokenType {
     Dollar,       // $
     Dot,          // .
     
+    // Comparison operators
+    NotEquals,    // !=
+    EqualEquals,  // ==
+    LessThan,     // <
+    LessThanOrEqual, // <=
+    GreaterThan,  // >
+    GreaterThanOrEqual, // >=
+    
+    // Ternary operator
+    Question,     // ?
+    
     // Pseudo-selector
     PseudoSelector(String), // &:hover, &:active, etc.
     
@@ -60,7 +71,6 @@ pub enum TokenType {
     Color(String), // #RGB, #RRGGBB, #RRGGBBAA
     Identifier(String),
     ScriptContent(String), // Raw script content inside @function or @script blocks
-    TemplateVariable(String), // Variable name inside {{ }}
     
     // Unit types for transform and CSS values
     Pixels(f64),      // 10px
@@ -122,6 +132,13 @@ impl fmt::Display for TokenType {
             TokenType::Semicolon => write!(f, ";"),
             TokenType::Comma => write!(f, ","),
             TokenType::Equals => write!(f, "="),
+            TokenType::NotEquals => write!(f, "!="),
+            TokenType::EqualEquals => write!(f, "=="),
+            TokenType::LessThan => write!(f, "<"),
+            TokenType::LessThanOrEqual => write!(f, "<="),
+            TokenType::GreaterThan => write!(f, ">"),
+            TokenType::GreaterThanOrEqual => write!(f, ">="),
+            TokenType::Question => write!(f, "?"),
             TokenType::Ampersand => write!(f, "&"),
             TokenType::Dollar => write!(f, "$"),
             TokenType::Dot => write!(f, "."),
@@ -134,7 +151,6 @@ impl fmt::Display for TokenType {
             TokenType::Color(c) => write!(f, "color({})", c),
             TokenType::Identifier(id) => write!(f, "identifier({})", id),
             TokenType::ScriptContent(content) => write!(f, "script_content({})", content),
-            TokenType::TemplateVariable(var) => write!(f, "template_variable({})", var),
             TokenType::Pixels(p) => write!(f, "pixels({}px)", p),
             TokenType::Em(e) => write!(f, "em({}em)", e),
             TokenType::Rem(r) => write!(f, "rem({}rem)", r),
@@ -343,16 +359,44 @@ impl Lexer {
             ':' => TokenType::Colon,
             ';' => TokenType::Semicolon,
             ',' => TokenType::Comma,
-            '=' => TokenType::Equals,
-            '$' => {
-                // Check if this is a variable reference like $variable_name
-                if self.peek().map_or(false, |c| c.is_alphabetic() || c == '_') {
-                    let variable_name = self.read_identifier_after_dollar()?;
-                    TokenType::TemplateVariable(variable_name)
+            '=' => {
+                // Check for == operator
+                if self.peek() == Some('=') {
+                    self.advance(); // consume second '='
+                    TokenType::EqualEquals
                 } else {
-                    TokenType::Dollar
+                    TokenType::Equals
                 }
             }
+            '!' => {
+                // Check for != operator
+                if self.peek() == Some('=') {
+                    self.advance(); // consume '='
+                    TokenType::NotEquals
+                } else {
+                    return Err(self.parse_error(format!("Unexpected character: '{}'", ch)));
+                }
+            }
+            '<' => {
+                // Check for <= operator
+                if self.peek() == Some('=') {
+                    self.advance(); // consume '='
+                    TokenType::LessThanOrEqual
+                } else {
+                    TokenType::LessThan
+                }
+            }
+            '>' => {
+                // Check for >= operator
+                if self.peek() == Some('=') {
+                    self.advance(); // consume '='
+                    TokenType::GreaterThanOrEqual
+                } else {
+                    TokenType::GreaterThan
+                }
+            }
+            '?' => TokenType::Question,
+            '$' => TokenType::Dollar,
             '.' => {
                 // Check if this is part of a number (e.g., .5) or standalone dot
                 if self.peek().map_or(false, |c| c.is_ascii_digit()) {
@@ -716,33 +760,6 @@ impl Lexer {
         Ok(identifier)
     }
     
-    fn read_identifier_after_dollar(&mut self) -> Result<String> {
-        let mut identifier = String::new();
-        
-        // First character must be alphabetic or underscore
-        if let Some(ch) = self.peek() {
-            if ch.is_alphabetic() || ch == '_' {
-                identifier.push(ch);
-                self.advance();
-            } else {
-                return Err(self.parse_error(
-                    format!("Invalid variable name: ${}", ch)
-                ));
-            }
-        }
-        
-        // Read the rest of the identifier
-        while let Some(ch) = self.peek() {
-            if ch.is_alphanumeric() || ch == '_' {
-                identifier.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        
-        Ok(identifier)
-    }
     
     fn identify_keyword_or_identifier(&self, text: String) -> TokenType {
         match text.as_str() {

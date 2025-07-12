@@ -338,14 +338,8 @@ impl Parser {
             )),
         };
         
-        // Parse function name and parameters
-        let function_name = match &self.advance().token_type {
-            TokenType::Identifier(name) => name.clone(),
-            _ => return Err(CompilerError::parse_legacy(
-                self.previous().line,
-                "Expected function name"
-            )),
-        };
+        // Parse function name and parameters (may include template variables)
+        let function_name = self.parse_function_name_pattern()?;
         
         // Parse parameter list
         self.consume(TokenType::LeftParen, "Expected '(' after function name")?;
@@ -535,6 +529,7 @@ impl Parser {
         
         let mut properties = Vec::new();
         let mut template = None;
+        let mut functions = Vec::new();
         
         while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
             if self.match_token(&TokenType::Newline) {
@@ -548,6 +543,8 @@ impl Parser {
             
             if self.match_token(&TokenType::Properties) {
                 properties = self.parse_component_properties()?;
+            } else if self.check(&TokenType::Function) {
+                functions.push(self.parse_function()?);
             } else if self.is_element_start() {
                 if template.is_some() {
                     return Err(CompilerError::parse_legacy(
@@ -559,7 +556,7 @@ impl Parser {
             } else {
                 return Err(CompilerError::parse_legacy(
                     self.peek().line,
-                    "Expected 'Properties' block or template element in component"
+                    "Expected 'Properties' block, '@function', or template element in component"
                 ));
             }
         }
@@ -575,6 +572,7 @@ impl Parser {
             name,
             properties,
             template,
+            functions,
         })
     }
     
@@ -746,6 +744,11 @@ impl Parser {
     }
     
     fn parse_value(&mut self) -> Result<PropertyValue> {
+        // First try to parse as an expression (for ternary operators)
+        if let Ok(expr) = self.try_parse_expression() {
+            return Ok(PropertyValue::Expression(Box::new(expr)));
+        }
+        
         let result = match &self.peek().token_type {
             TokenType::String(s) => {
                 let value = format!("\"{}\"", s);
@@ -817,10 +820,20 @@ impl Parser {
                 self.advance();
                 Ok(PropertyValue::Color(value))
             }
-            TokenType::TemplateVariable(var) => {
-                let value = var.clone();
-                self.advance();
-                Ok(PropertyValue::Variable(value))
+            TokenType::Dollar => {
+                // Handle ${variable} syntax
+                self.advance(); // consume '$'
+                self.consume(TokenType::LeftBrace, "Expected '{' after '$'")?;
+                if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                    let value = var_name.clone();
+                    self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
+                    Ok(PropertyValue::Variable(value))
+                } else {
+                    Err(CompilerError::parse_legacy(
+                        self.previous().line,
+                        "Expected variable name in ${variable}"
+                    ))
+                }
             }
             TokenType::LeftBrace => {
                 // Parse object literal
@@ -1039,6 +1052,61 @@ impl Parser {
         Ok(Some(Box::new(default_app)))
     }
     
+    /// Parse function name pattern that may include template variables
+    fn parse_function_name_pattern(&mut self) -> Result<String> {
+        let mut name_parts = Vec::new();
+        
+        // Parse the function name which must use ${variable} syntax to avoid ambiguity
+        // Examples: handle_${component_id}_click, toggle_${id}
+        loop {
+            match &self.peek().token_type {
+                TokenType::Identifier(name) => {
+                    name_parts.push(name.clone());
+                    self.advance();
+                }
+                TokenType::Dollar => {
+                    // Require ${var_name} syntax for variables in function names
+                    self.advance(); // consume $
+                    if self.match_token(&TokenType::LeftBrace) {
+                        if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                            name_parts.push(format!("${}", var_name));
+                            self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
+                        } else {
+                            return Err(CompilerError::parse_legacy(
+                                self.previous().line,
+                                "Expected variable name after '${'",
+                            ));
+                        }
+                    } else {
+                        return Err(CompilerError::parse_legacy(
+                            self.previous().line,
+                            "Function names require ${variable} syntax - use ${component_id} instead of $component_id",
+                        ));
+                    }
+                }
+                TokenType::LeftParen => {
+                    // End of function name, start of parameters
+                    break;
+                }
+                _ => {
+                    return Err(CompilerError::parse_legacy(
+                        self.peek().line,
+                        "Expected identifier, ${variable}, or '(' in function name"
+                    ));
+                }
+            }
+        }
+        
+        if name_parts.is_empty() {
+            return Err(CompilerError::parse_legacy(
+                self.peek().line,
+                "Function name cannot be empty"
+            ));
+        }
+        
+        Ok(name_parts.join(""))
+    }
+    
     /// Extract template variables from a string value
     /// Finds patterns like $variable_name and returns a list of variable names
     fn extract_template_variables(&self, value: &str) -> Vec<String> {
@@ -1055,6 +1123,126 @@ impl Parser {
         }
         
         variables
+    }
+    
+    /// Try to parse an expression (with backtracking)
+    fn try_parse_expression(&mut self) -> Result<Expression> {
+        let start_position = self.current;
+        
+        match self.parse_ternary_expression() {
+            Ok(expr) => Ok(expr),
+            Err(_) => {
+                // Backtrack if parsing fails
+                self.current = start_position;
+                Err(CompilerError::parse("Unknown".to_string(), 0, "Not an expression"))
+            }
+        }
+    }
+    
+    /// Parse ternary expression: condition ? true_value : false_value
+    fn parse_ternary_expression(&mut self) -> Result<Expression> {
+        let condition = self.parse_comparison_expression()?;
+        
+        if self.match_token(&TokenType::Question) {
+            let true_value = self.parse_comparison_expression()?;
+            self.consume(TokenType::Colon, "Expected ':' in ternary expression")?;
+            let false_value = self.parse_comparison_expression()?;
+            
+            Ok(Expression::Ternary {
+                condition: Box::new(condition),
+                true_value: Box::new(true_value),
+                false_value: Box::new(false_value),
+            })
+        } else {
+            Ok(condition)
+        }
+    }
+    
+    /// Parse comparison expressions: ==, !=, <, <=, >, >=
+    fn parse_comparison_expression(&mut self) -> Result<Expression> {
+        let left = self.parse_primary_expression()?;
+        
+        match &self.peek().token_type {
+            TokenType::NotEquals => {
+                self.advance();
+                let right = self.parse_primary_expression()?;
+                Ok(Expression::NotEquals(Box::new(left), Box::new(right)))
+            }
+            TokenType::EqualEquals => {
+                self.advance();
+                let right = self.parse_primary_expression()?;
+                Ok(Expression::EqualEquals(Box::new(left), Box::new(right)))
+            }
+            TokenType::LessThan => {
+                self.advance();
+                let right = self.parse_primary_expression()?;
+                Ok(Expression::LessThan(Box::new(left), Box::new(right)))
+            }
+            TokenType::LessThanOrEqual => {
+                self.advance();
+                let right = self.parse_primary_expression()?;
+                Ok(Expression::LessThanOrEqual(Box::new(left), Box::new(right)))
+            }
+            TokenType::GreaterThan => {
+                self.advance();
+                let right = self.parse_primary_expression()?;
+                Ok(Expression::GreaterThan(Box::new(left), Box::new(right)))
+            }
+            TokenType::GreaterThanOrEqual => {
+                self.advance();
+                let right = self.parse_primary_expression()?;
+                Ok(Expression::GreaterThanOrEqual(Box::new(left), Box::new(right)))
+            }
+            _ => Ok(left)
+        }
+    }
+    
+    /// Parse primary expressions: literals, variables
+    fn parse_primary_expression(&mut self) -> Result<Expression> {
+        match &self.peek().token_type {
+            TokenType::String(s) => {
+                let value = s.clone();
+                self.advance();
+                Ok(Expression::String(value))
+            }
+            TokenType::Number(n) => {
+                let value = *n;
+                self.advance();
+                Ok(Expression::Number(value))
+            }
+            TokenType::Integer(i) => {
+                let value = *i;
+                self.advance();
+                Ok(Expression::Integer(value))
+            }
+            TokenType::Boolean(b) => {
+                let value = *b;
+                self.advance();
+                Ok(Expression::Boolean(value))
+            }
+            TokenType::Dollar => {
+                // Handle ${variable} syntax in expressions
+                self.advance(); // consume '$'
+                self.consume(TokenType::LeftBrace, "Expected '{' after '$'")?;
+                if let TokenType::Identifier(var_name) = &self.advance().token_type {
+                    let value = var_name.clone();
+                    self.consume(TokenType::RightBrace, "Expected '}' after variable name")?;
+                    Ok(Expression::Variable(value))
+                } else {
+                    Err(CompilerError::parse_legacy(
+                        self.previous().line,
+                        "Expected variable name in ${variable}"
+                    ))
+                }
+            }
+            TokenType::LeftParen => {
+                self.advance(); // consume '('
+                let expr = self.parse_ternary_expression()?;
+                self.consume(TokenType::RightParen, "Expected ')' after expression")?;
+                Ok(expr)
+            }
+            _ => Err(CompilerError::parse("Unknown".to_string(), 0, "Expected expression"))
+        }
     }
 }
 

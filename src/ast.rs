@@ -53,6 +53,7 @@ pub enum AstNode {
         name: String,
         properties: Vec<ComponentProperty>,
         template: Box<AstNode>,
+        functions: Vec<AstNode>, // Function templates within component
     },
     
     /// Properties block (in component definition)
@@ -99,6 +100,33 @@ pub enum PropertyValue {
     Object(HashMap<String, PropertyValue>),
     Array(Vec<PropertyValue>),
     Variable(String), // Template variable reference
+    Expression(Box<Expression>), // For complex expressions like ternary operators
+}
+
+/// Expression AST for complex value expressions
+#[derive(Debug, Clone)]
+pub enum Expression {
+    /// Literal values
+    String(String),
+    Number(f64),
+    Integer(i64),
+    Boolean(bool),
+    Variable(String),
+    
+    /// Binary comparison operators
+    NotEquals(Box<Expression>, Box<Expression>),
+    EqualEquals(Box<Expression>, Box<Expression>),
+    LessThan(Box<Expression>, Box<Expression>),
+    LessThanOrEqual(Box<Expression>, Box<Expression>),
+    GreaterThan(Box<Expression>, Box<Expression>),
+    GreaterThanOrEqual(Box<Expression>, Box<Expression>),
+    
+    /// Ternary conditional operator: condition ? true_value : false_value
+    Ternary {
+        condition: Box<Expression>,
+        true_value: Box<Expression>,
+        false_value: Box<Expression>,
+    },
 }
 
 impl PropertyValue {
@@ -122,6 +150,7 @@ impl PropertyValue {
             PropertyValue::Object(_) => "[Object]".to_string(),
             PropertyValue::Array(_) => "[Array]".to_string(),
             PropertyValue::Variable(v) => format!("${}", v),
+            PropertyValue::Expression(expr) => expr.to_string(),
         }
     }
     
@@ -132,6 +161,7 @@ impl PropertyValue {
             PropertyValue::String(s) => s.contains('$'),
             PropertyValue::Object(obj) => obj.values().any(|v| v.has_variables()),
             PropertyValue::Array(arr) => arr.iter().any(|v| v.has_variables()),
+            PropertyValue::Expression(expr) => expr.has_variables(),
             _ => false,
         }
     }
@@ -153,11 +183,86 @@ impl PropertyValue {
                     variables.extend(value.extract_variables());
                 }
             },
+            PropertyValue::Expression(expr) => {
+                variables.extend(expr.extract_variables());
+            },
             PropertyValue::Array(arr) => {
                 for value in arr {
                     variables.extend(value.extract_variables());
                 }
             },
+            _ => {}
+        }
+        variables
+    }
+}
+
+impl Expression {
+    /// Convert Expression to string representation
+    pub fn to_string(&self) -> String {
+        match self {
+            Expression::String(s) => s.clone(),
+            Expression::Number(n) => n.to_string(),
+            Expression::Integer(i) => i.to_string(),
+            Expression::Boolean(b) => b.to_string(),
+            Expression::Variable(v) => format!("${}", v),
+            Expression::NotEquals(left, right) => format!("{} != {}", left.to_string(), right.to_string()),
+            Expression::EqualEquals(left, right) => format!("{} == {}", left.to_string(), right.to_string()),
+            Expression::LessThan(left, right) => format!("{} < {}", left.to_string(), right.to_string()),
+            Expression::LessThanOrEqual(left, right) => format!("{} <= {}", left.to_string(), right.to_string()),
+            Expression::GreaterThan(left, right) => format!("{} > {}", left.to_string(), right.to_string()),
+            Expression::GreaterThanOrEqual(left, right) => format!("{} >= {}", left.to_string(), right.to_string()),
+            Expression::Ternary { condition, true_value, false_value } => {
+                format!("{} ? {} : {}", condition.to_string(), true_value.to_string(), false_value.to_string())
+            }
+        }
+    }
+    
+    /// Check if this expression contains template variables
+    pub fn has_variables(&self) -> bool {
+        match self {
+            Expression::Variable(_) => true,
+            Expression::String(s) => s.contains('$'),
+            Expression::NotEquals(left, right) |
+            Expression::EqualEquals(left, right) |
+            Expression::LessThan(left, right) |
+            Expression::LessThanOrEqual(left, right) |
+            Expression::GreaterThan(left, right) |
+            Expression::GreaterThanOrEqual(left, right) => {
+                left.has_variables() || right.has_variables()
+            }
+            Expression::Ternary { condition, true_value, false_value } => {
+                condition.has_variables() || true_value.has_variables() || false_value.has_variables()
+            }
+            _ => false,
+        }
+    }
+    
+    /// Extract template variables from this expression
+    pub fn extract_variables(&self) -> Vec<String> {
+        let mut variables = Vec::new();
+        match self {
+            Expression::Variable(v) => variables.push(v.clone()),
+            Expression::String(s) => {
+                // Extract $variable patterns from string
+                if s.contains('$') {
+                    // TODO: Implement proper variable extraction
+                }
+            },
+            Expression::NotEquals(left, right) |
+            Expression::EqualEquals(left, right) |
+            Expression::LessThan(left, right) |
+            Expression::LessThanOrEqual(left, right) |
+            Expression::GreaterThan(left, right) |
+            Expression::GreaterThanOrEqual(left, right) => {
+                variables.extend(left.extract_variables());
+                variables.extend(right.extract_variables());
+            }
+            Expression::Ternary { condition, true_value, false_value } => {
+                variables.extend(condition.extract_variables());
+                variables.extend(true_value.extract_variables());
+                variables.extend(false_value.extract_variables());
+            }
             _ => {}
         }
         variables

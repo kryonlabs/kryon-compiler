@@ -112,7 +112,7 @@ impl SemanticAnalyzer {
     }
     
     fn collect_component_definition(&mut self, ast: &AstNode, state: &mut CompilerState) -> Result<()> {
-        if let AstNode::Component { name, properties, template: _ } = ast {
+        if let AstNode::Component { name, properties, template: _, .. } = ast {
             // Check for duplicate component names - but allow includes to redefine components
             // The latest definition wins (include order matters)
             if let Some(existing_index) = state.component_defs.iter().position(|c| c.name == *name) {

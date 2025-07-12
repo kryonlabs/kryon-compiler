@@ -439,7 +439,7 @@ fn compile_ast_with_state(
         // Extract component definitions and templates from AST
         if let AstNode::File { components, .. } = &ast {
             for component_node in components {
-                if let AstNode::Component { name, properties, template } = component_node {
+                if let AstNode::Component { name, properties, template, .. } = component_node {
                     // Store the template AST for the resolver to use
                     state.component_ast_templates.insert(name.clone(), (**template).clone());
                     
@@ -717,6 +717,11 @@ pub fn compile_source_with_options(
         log::debug!("Phase 0.2 complete. Variables resolved: {}", stats.variable_count);
     }
     
+    // Phase 0.3: Resolve global function templates (placeholder - needs AST first)
+    if options.debug_mode {
+        log::debug!("Phase 0.3: Will resolve global function templates after parsing...");
+    }
+    
     // Phase 1: Lexical analysis and parsing
     if options.debug_mode {
         log::debug!("Phase 1: Lexical analysis and parsing...");
@@ -760,25 +765,27 @@ pub fn compile_source_with_options(
         log::debug!("Phase 1.25 complete. Style inheritance resolved");
     }
     
-    // Phase 1.3: Process scripts
+    // Phase 1.3: Collect function templates  
     if options.debug_mode {
-        log::debug!("Phase 1.3: Processing scripts...");
+        log::debug!("Phase 1.3: Collecting function templates...");
     }
     
-    let script_processor = ScriptProcessor::new();
-    
-    // Extract scripts from AST and process them
-    if let AstNode::File { scripts, .. } = &ast {
-        for script_node in scripts {
-            let script_entry = script_processor.process_script(script_node, &mut state)?;
-            state.scripts.push(script_entry);
-        }
-    }
-    
-    stats.script_count = state.scripts.len();
+    collect_function_templates(&ast, &mut state)?;
     
     if options.debug_mode {
-        log::debug!("Phase 1.3 complete. Scripts processed: {}", stats.script_count);
+        log::debug!("Phase 1.3 complete. Function templates collected: {}", state.function_templates.len());
+    }
+    
+    // Phase 1.35: Resolve global function templates
+    if options.debug_mode {
+        log::debug!("Phase 1.35: Resolving global function templates...");
+    }
+    
+    resolve_global_function_templates(&mut state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.35 complete. Global functions resolved: {}", 
+                   state.resolved_functions.len());
     }
     
     // Phase 1.4: Convert AST to internal representation
@@ -824,7 +831,7 @@ pub fn compile_source_with_options(
         // Extract component definitions and templates from AST
         if let AstNode::File { components, .. } = &ast {
             for component_node in components {
-                if let AstNode::Component { name, properties, template } = component_node {
+                if let AstNode::Component { name, properties, template, .. } = component_node {
                     // Store the template AST for the resolver to use
                     state.component_ast_templates.insert(name.clone(), (**template).clone());
                     
@@ -906,6 +913,19 @@ pub fn compile_source_with_options(
     if options.debug_mode {
         log::debug!("Phase 1.6 complete. Template variables: {}, bindings: {}", 
                    state.template_variables.len(), state.template_bindings.len());
+    }
+    
+    // Phase 1.7: Process resolved scripts
+    if options.debug_mode {
+        log::debug!("Phase 1.7: Processing resolved scripts...");
+    }
+    
+    process_resolved_scripts(&mut state)?;
+    
+    stats.script_count = state.scripts.len();
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.7 complete. Scripts processed: {}", stats.script_count);
     }
     
     // Phase 2: Calculate sizes
@@ -1030,7 +1050,7 @@ fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<()> 
             
             // Process components
             for component_node in components {
-                if let AstNode::Component { name, properties, template } = component_node {
+                if let AstNode::Component { name, properties, template, .. } = component_node {
                     let mut component_def = ComponentDefinition {
                         name: name.clone(),
                         properties: Vec::new(),
@@ -1914,4 +1934,180 @@ App {
         assert!(!options.generate_debug_info);
         assert!(options.custom_variables.is_empty());
     }
+}
+
+/// Collect function templates from AST (Phase 1.3)
+fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Result<()> {
+    use crate::types::{FunctionTemplate, FunctionScope, SourceLocation};
+    use std::collections::HashSet;
+    
+    match ast {
+        AstNode::File { scripts, components, .. } => {
+            // Collect global function templates
+            for script_node in scripts {
+                if let AstNode::Script { language, name, source, .. } = script_node {
+                    if let Some(func_name) = name {
+                        let template = create_function_template(
+                            func_name,
+                            language,
+                            source,
+                            &[],
+                            FunctionScope::Global,
+                            state
+                        )?;
+                        state.function_templates.push(template);
+                    }
+                }
+            }
+            
+            // Collect component function templates
+            for component_node in components {
+                if let AstNode::Component { name: comp_name, functions, .. } = component_node {
+                    for script_node in functions {
+                        if let AstNode::Script { language, name, source, .. } = script_node {
+                            if let Some(func_name) = name {
+                                let template = create_function_template(
+                                    func_name,
+                                    language,
+                                    source,
+                                    &[],
+                                    FunctionScope::Component(comp_name.clone()),
+                                    state
+                                )?;
+                                state.function_templates.push(template);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    Ok(())
+}
+
+/// Create a function template from parsed script data
+fn create_function_template(
+    name_pattern: &str,
+    language: &str,
+    source: &crate::ast::ScriptSource,
+    parameters: &[String],
+    scope: FunctionScope,
+    state: &mut CompilerState,
+) -> Result<FunctionTemplate> {
+    use crate::types::{FunctionTemplate, SourceLocation};
+    use std::collections::HashSet;
+    
+    let body = match source {
+        crate::ast::ScriptSource::Inline(code) => code.clone(),
+        crate::ast::ScriptSource::External(path) => {
+            return Err(CompilerError::parse_legacy(
+                0,
+                "External script files not supported for function templates yet"
+            ));
+        }
+    };
+    
+    // Extract required variables from name pattern and body
+    let mut required_vars = HashSet::new();
+    extract_variables_from_text(name_pattern, &mut required_vars);
+    extract_variables_from_text(&body, &mut required_vars);
+    
+    let template_id = state.next_template_id;
+    state.next_template_id += 1;
+    
+    Ok(FunctionTemplate {
+        id: template_id,
+        name_pattern: name_pattern.to_string(),
+        body,
+        parameters: parameters.to_vec(),
+        language: language.to_string(),
+        scope,
+        required_vars,
+        source_location: SourceLocation {
+            file: state.current_file_path.clone(),
+            line: state.current_line_num,
+            column: 0,
+        },
+    })
+}
+
+/// Extract variables from text (simple $var pattern matching)
+fn extract_variables_from_text(text: &str, vars: &mut std::collections::HashSet<String>) {
+    let var_regex = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+    for cap in var_regex.captures_iter(text) {
+        if let Some(var_name) = cap.get(1) {
+            vars.insert(var_name.as_str().to_string());
+        }
+    }
+}
+
+/// Resolve global function templates (Phase 1.35)
+fn resolve_global_function_templates(state: &mut CompilerState) -> Result<()> {
+    use crate::types::{FunctionScope, ResolvedFunction};
+    
+    for template in &state.function_templates {
+        if template.scope == FunctionScope::Global {
+            // Check if all required variables are available
+            for var_name in &template.required_vars {
+                if !state.variable_context.has_variable(var_name) {
+                    // Skip this template - variables not available yet
+                    continue;
+                }
+            }
+            
+            // Resolve the template
+            let resolved_name = state.variable_context.substitute_variables(&template.name_pattern)?;
+            let resolved_body = state.variable_context.substitute_variables(&template.body)?;
+            
+            // Build complete function code
+            let param_list = template.parameters.join(", ");
+            let code = format!(
+                "function {}({})\n{}\nend",
+                resolved_name,
+                param_list,
+                resolved_body
+            );
+            
+            let resolved_function = ResolvedFunction {
+                name: resolved_name.clone(),
+                code,
+                template_id: template.id,
+                instance_context: None,
+                language: template.language.clone(),
+                parameters: template.parameters.clone(),
+            };
+            
+            state.resolved_functions.insert(resolved_name, resolved_function);
+        }
+    }
+    
+    Ok(())
+}
+
+/// Process resolved scripts into ScriptEntry format (Phase 1.7)
+fn process_resolved_scripts(state: &mut CompilerState) -> Result<()> {
+    use crate::script::ScriptProcessor;
+    use crate::ast::{AstNode, ScriptSource};
+    
+    let script_processor = ScriptProcessor::new();
+    
+    // Collect resolved functions first to avoid borrowing issues
+    let resolved_funcs: Vec<_> = state.resolved_functions.values().cloned().collect();
+    
+    // Process all resolved functions as script entries
+    for resolved_func in resolved_funcs {
+        let script_node = AstNode::Script {
+            language: resolved_func.language.clone(),
+            name: Some(resolved_func.name.clone()),
+            source: ScriptSource::Inline(resolved_func.code.clone()),
+            mode: None,
+        };
+        
+        let script_entry = script_processor.process_script(&script_node, state)?;
+        state.scripts.push(script_entry);
+    }
+    
+    Ok(())
 }

@@ -925,6 +925,12 @@ pub struct CompilerState {
     pub transforms: Vec<TransformData>,
     pub transform_offset: u32,
     pub total_transform_size: u32,
+    
+    // Function template data
+    pub function_templates: Vec<FunctionTemplate>,
+    pub resolved_functions: HashMap<String, ResolvedFunction>,
+    pub component_functions: HashMap<String, Vec<String>>, // Component instance -> [func names]
+    pub next_template_id: usize,
 }
 
 impl CompilerState {
@@ -967,6 +973,10 @@ impl CompilerState {
             transforms: Vec::new(),
             transform_offset: 0,
             total_transform_size: 0,
+            function_templates: Vec::new(),
+            resolved_functions: HashMap::new(),
+            component_functions: HashMap::new(),
+            next_template_id: 0,
         }
     }
     
@@ -1036,4 +1046,42 @@ impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{:02X}{:02X}{:02X}{:02X}", self.r, self.g, self.b, self.a)
     }
+}
+
+// Function template system for dynamic function names
+use std::collections::HashSet;
+
+#[derive(Debug, Clone)]
+pub struct FunctionTemplate {
+    pub id: usize,
+    pub name_pattern: String,        // "toggle_dropdown_$component_id"
+    pub body: String,               // Function body with $vars
+    pub parameters: Vec<String>,    // ["value", "index"]
+    pub language: String,           // "lua"
+    pub scope: FunctionScope,       // Global or Component("Dropdown")
+    pub required_vars: HashSet<String>, // Variables used in name/body
+    pub source_location: SourceLocation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionScope {
+    Global,
+    Component(String), // Component name
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceLocation {
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedFunction {
+    pub name: String,              // "toggle_colors"
+    pub code: String,              // Body with vars substituted
+    pub template_id: usize,        // Links back to template
+    pub instance_context: Option<String>, // "Dropdown:colors"
+    pub language: String,          // "lua"
+    pub parameters: Vec<String>,   // ["value", "index"]
 }
