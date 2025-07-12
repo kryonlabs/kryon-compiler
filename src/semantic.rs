@@ -436,7 +436,7 @@ impl SemanticAnalyzer {
     
     fn check_unused_definitions(&mut self, state: &CompilerState) -> Result<()> {
         // Check for unused styles
-        let mut used_styles: HashSet<String> = HashSet::new();
+        let used_styles: HashSet<String> = HashSet::new();
 
         // This would require traversing all elements to see which styles are referenced
         // For now, just warn about styles that don't extend anything and aren't extended

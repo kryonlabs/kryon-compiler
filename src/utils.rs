@@ -1,7 +1,7 @@
 //! Utility functions for the Kryon compiler
 
 use crate::error::{CompilerError, Result};
-use crate::types::{Color, ValueType, VariableDef, CompilerState};
+use crate::types::{Color, VariableDef, CompilerState};
 
 use meval;
 use regex::Regex;

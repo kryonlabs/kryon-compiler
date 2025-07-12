@@ -3,7 +3,7 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::types::*;
-use crate::variable_context::{VariableContext, VariableScope};
+use crate::variable_context::VariableScope;
 use std::collections::HashMap;
 use regex;
 
@@ -19,27 +19,34 @@ impl ComponentResolver {
     }
     
     /// Substitute variables in a string using the provided mapping
-    /// Only supports ${variable} syntax
+    /// Supports both $variable and ${variable} syntax
     pub fn substitute_variables(&self, input: &str, mapping: &HashMap<String, String>) -> Result<String> {
         let mut result = input.to_string();
         
-        // Only support ${variable} syntax
-        let var_regex = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+        // Support both $variable and ${variable} syntax
+        let var_regex = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
         
-        // Process ${variable} syntax
+        // Process both $variable and ${variable} syntax
         for capture in var_regex.captures_iter(input) {
-            if let Some(var_name) = capture.get(1) {
-                let var_name_str = var_name.as_str();
-                if let Some(value) = mapping.get(var_name_str) {
-                    let pattern = format!("${{{}}}", var_name_str);
-                    result = result.replace(&pattern, value);
-                } else {
-                    return Err(CompilerError::Variable {
-                        file: "test".to_string(),
-                        line: 0,
-                        message: format!("Undefined variable: ${{{}}}", var_name_str),
-                    });
-                }
+            let full_match = capture.get(0).unwrap().as_str();
+            
+            // Check which capture group matched (1 for ${variable}, 2 for $variable)
+            let var_name_str = if let Some(braced_var) = capture.get(1) {
+                braced_var.as_str()
+            } else if let Some(simple_var) = capture.get(2) {
+                simple_var.as_str()
+            } else {
+                continue;
+            };
+            
+            if let Some(value) = mapping.get(var_name_str) {
+                result = result.replace(full_match, value);
+            } else {
+                return Err(CompilerError::Variable {
+                    file: "test".to_string(),
+                    line: 0,
+                    message: format!("Undefined variable: {}", var_name_str),
+                });
             }
         }
         
@@ -80,7 +87,7 @@ impl ComponentResolver {
     
     fn resolve_element_components(&mut self, element: &mut AstNode, state: &mut CompilerState) -> Result<()> {
         match element {
-            AstNode::Element { element_type, properties, children, .. } => {
+            AstNode::Element { element_type,  children, .. } => {
                 // Check if this element is a component instance
                 if let Some(component_def) = self.find_component_definition(element_type, state) {
                     self.instantiate_component(element, &component_def, state)?;
@@ -109,7 +116,7 @@ impl ComponentResolver {
         component_def: &ComponentDefinition,
         state: &mut CompilerState
     ) -> Result<()> {
-        if let AstNode::Element { element_type, properties, children, .. } = element {
+        if let AstNode::Element {  properties, children, .. } = element {
             // Check for recursive instantiation
             if self.instantiation_stack.contains(&component_def.name) {
                 return Err(CompilerError::component_legacy(

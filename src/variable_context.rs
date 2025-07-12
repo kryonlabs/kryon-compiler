@@ -178,26 +178,33 @@ impl VariableContext {
         self.get_variable(name).is_some()
     }
     
-    /// Substitute all ${variable} references in a string
+    /// Substitute all $variable and ${variable} references in a string
     pub fn substitute_variables(&self, input: &str) -> Result<String> {
         let mut result = input.to_string();
         
-        // Only support ${variable} syntax
-        let var_regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+        // Support both $variable and ${variable} syntax
+        let var_regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)")
             .map_err(|e| CompilerError::variable_legacy(0, format!("Regex error: {}", e)))?;
         
-        // Process ${variable} syntax
+        // Process both $variable and ${variable} syntax
         let matches: Vec<_> = var_regex.captures_iter(input).collect();
         for captures in matches {
             if let Some(var_match) = captures.get(0) {
-                let var_name = &captures[1];
+                // Check which capture group matched (1 for ${variable}, 2 for $variable)
+                let var_name = if let Some(braced_var) = captures.get(1) {
+                    braced_var.as_str()
+                } else if let Some(simple_var) = captures.get(2) {
+                    simple_var.as_str()
+                } else {
+                    continue;
+                };
                 
                 if let Some(var_entry) = self.get_variable(var_name) {
                     result = result.replace(var_match.as_str(), &var_entry.value);
                 } else {
                     return Err(CompilerError::variable_legacy(
                         0,
-                        format!("Undefined variable: ${{{}}}", var_name)
+                        format!("Undefined variable: {}", var_name)
                     ));
                 }
             }
