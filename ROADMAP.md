@@ -108,7 +108,7 @@ This roadmap outlines the implementation status and missing features for the Kry
 - [ ] **Style Definition Encoding**
   - [ ] Resolved style inheritance
   - [ ] Pseudo-selector support
-  - [ ] Style property block references
+  [ ] Style property block references
 
 - [ ] **Component Template Encoding**
   - [ ] Component definition storage
@@ -125,12 +125,17 @@ This roadmap outlines the implementation status and missing features for the Kry
   - [ ] External file metadata
   - [ ] Integrity checksums
   - [ ] Platform-specific variants
+  - [ ] **New Asset Types:** Encoding for 3D models, audio files, and shader programs.
+
+- [ ] **Render Command Encoding**
+  - [ ] Encoding for all new `RenderCommand` variants (Pixel Manipulation, Advanced 2D Styles, Render Targets, Debugging, Post-Processing parameters).
+  - [ ] Efficient serialization of complex data structures like `ImageData`, `Gradient`, `Pattern`, `Shadow`, `RenderTargetConfig`.
 
 **Tests Needed:**
-- [ ] Generate valid KRB files for all spec examples
-- [ ] Verify binary format compliance
-- [ ] Test with kryon-renderer and Go runtime
-- [ ] Compression ratio validation
+- [ ] Generate valid KRB files for all spec examples, including new features.
+- [ ] Verify binary format compliance for all new data types.
+- [ ] Test with `kryon-renderer` and Go runtime for full feature compatibility.
+- [ ] Compression ratio validation for new asset types and command data.
 
 ### 3. Development Tools Enhancement
 **Status:** 🟡 Basic Implementation  
@@ -147,18 +152,24 @@ According to the spec, these tools should be part of the compiler:
   - [ ] Property usage analysis
   - [ ] Component dependency graph
   - [ ] Visual tree representation
+  - [ ] **New Asset Inspection:** Ability to inspect embedded 3D models, audio, and shader metadata.
+  - [ ] **Render Command Trace:** Visualize the sequence of `RenderCommand`s generated.
 
 - [ ] **Performance Profiling (`kryc profile`)**
   - [ ] Load time analysis by platform
   - [ ] Memory usage projection
   - [ ] Render performance estimates
   - [ ] Optimization suggestions
+  - [ ] **Asset Loading Profiling:** Identify bottlenecks in loading new asset types.
+  - [ ] **Command Execution Profiling:** Analyze the performance impact of different `RenderCommand`s.
 
 - [ ] **Size Analysis (`kryc optimize`)**
   - [ ] Redundant data identification
   - [ ] Compression ratio analysis
   - [ ] Tree structure optimization
   - [ ] Size reduction opportunities
+  - [ ] **Asset Optimization:** Tools for optimizing 3D models, textures, and audio within the KRB.
+  - [ ] **Command Stream Optimization:** Reduce redundancy in generated `RenderCommand`s.
 
 **Implementation Plan:**
 ```bash
@@ -166,14 +177,17 @@ According to the spec, these tools should be part of the compiler:
 kryc analyze app.krb --format=detailed --output=analysis.txt
 kryc analyze app.krb --tree --dependencies
 kryc analyze app.krb --size --compression
+kryc analyze app.krb --assets --commands # New flags for asset and command inspection
 
 # New profiling command  
 kryc profile app.krb --platform=desktop --output=profile.json
 kryc profile app.krb --memory --performance
+kryc profile app.krb --asset-loading --command-execution # New flags for detailed profiling
 
 # New optimization command
 kryc optimize app.krb --suggestions --output=optimized.krb
 kryc optimize app.krb --compress=max --deduplicate
+kryc optimize app.krb --optimize-assets --optimize-commands # New flags for asset and command optimization
 ```
 
 ## Medium Priority Features (Advanced Compiler)
