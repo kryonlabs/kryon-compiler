@@ -386,6 +386,21 @@ impl StyleResolver {
                     ));
                 }
             }
+            PropertyId::ZIndex => {
+                if let Ok(val) = cleaned_value.parse::<i16>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        source_prop.line_num,
+                        format!("Invalid z-index value: {}", cleaned_value)
+                    ));
+                }
+            }
             PropertyId::Invalid => None, // Skip invalid properties
             _ => {
                 // For other properties, store as string for now

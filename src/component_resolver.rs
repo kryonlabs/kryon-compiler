@@ -42,6 +42,12 @@ impl ComponentResolver {
             if let Some(value) = mapping.get(var_name_str) {
                 result = result.replace(full_match, value);
             } else {
+                println!("DEBUG: Component resolver variable substitution failed for '{}'", var_name_str);
+                println!("  Input: {}", input);
+                println!("  Available in mapping:");
+                for (k, v) in mapping {
+                    println!("    {} = {}", k, v);
+                }
                 return Err(CompilerError::Variable {
                     file: "test".to_string(),
                     line: 0,
@@ -54,8 +60,100 @@ impl ComponentResolver {
     }
     
     pub fn resolve_components(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {
+        println!("DEBUG: Starting component resolution");
+        // Only resolve components - template structures will be resolved within component instantiation
         self.resolve_recursive(ast, state)?;
         self.update_component_statistics(state);
+        println!("DEBUG: Component resolution complete");
+        Ok(())
+    }
+    
+    fn resolve_template_structures(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {
+        match ast {
+            AstNode::File { app, .. } => {
+                if let Some(app_node) = app {
+                    self.process_template_in_element(app_node, state)?;
+                }
+            }
+            _ => {
+                self.process_template_in_element(ast, state)?;
+            }
+        }
+        Ok(())
+    }
+    
+    fn process_template_in_element(&mut self, element: &mut AstNode, state: &mut CompilerState) -> Result<()> {
+        match element {
+            AstNode::Element { children, .. } => {
+                let mut i = 0;
+                while i < children.len() {
+                    match &children[i] {
+                        AstNode::For { variable, collection, body } => {
+                            // Extract values to avoid borrowing issues
+                            let var_name = variable.clone();
+                            let collection_name = collection.clone();
+                            let body_clone = body.clone();
+                            
+                            // Expand the @for loop
+                            let mut expanded = AstNode::Element {
+                                element_type: "Container".to_string(),
+                                properties: vec![],
+                                pseudo_selectors: vec![],
+                                children: vec![],
+                            };
+                            
+                            self.expand_for_loop(&mut expanded, &var_name, &collection_name, &body_clone, state)?;
+                            
+                            // Replace the @for with the expanded container
+                            if let AstNode::Element { children: expanded_children, .. } = expanded {
+                                let len = expanded_children.len();
+                                children.remove(i);
+                                for (j, child) in expanded_children.into_iter().enumerate() {
+                                    children.insert(i + j, child);
+                                }
+                                i += len;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        AstNode::If { condition, then_body, elif_branches, else_body } => {
+                            // Similar expansion for @if
+                            let cond = condition.clone();
+                            let then_clone = then_body.clone();
+                            let elif_clone = elif_branches.clone();
+                            let else_clone = else_body.clone();
+                            
+                            let mut expanded = AstNode::Element {
+                                element_type: "Container".to_string(),
+                                properties: vec![],
+                                pseudo_selectors: vec![],
+                                children: vec![],
+                            };
+                            
+                            self.expand_if_conditional(&mut expanded, &cond, &then_clone, &elif_clone, &else_clone, state)?;
+                            
+                            // Replace the @if with the expanded container
+                            if let AstNode::Element { children: expanded_children, .. } = expanded {
+                                let len = expanded_children.len();
+                                children.remove(i);
+                                for (j, child) in expanded_children.into_iter().enumerate() {
+                                    children.insert(i + j, child);
+                                }
+                                i += len;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        _ => {
+                            // Recursively process children
+                            self.process_template_in_element(&mut children[i], state)?;
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
     
@@ -74,12 +172,15 @@ impl ComponentResolver {
                     }
                 }
                 
-                // Second pass: resolve component instances in the main app
+                // Second pass: resolve component instances and template structures in the main app
                 if let Some(app_node) = app {
                     self.resolve_element_components(app_node, state)?;
                 }
             }
-            _ => {}
+            // Handle standalone template structures at any level
+            _ => {
+                self.resolve_element_components(ast, state)?;
+            }
         }
         
         Ok(())
@@ -98,6 +199,25 @@ impl ComponentResolver {
                     }
                 }
             }
+            AstNode::For { variable, collection, body } => {
+                // Extract values to avoid borrowing issues
+                let var_name = variable.clone();
+                let collection_name = collection.clone();
+                let body_clone = body.clone();
+                
+                // Expand @for loops into multiple elements
+                self.expand_for_loop(element, &var_name, &collection_name, &body_clone, state)?;
+            }
+            AstNode::If { condition, then_body, elif_branches, else_body } => {
+                // Extract values to avoid borrowing issues
+                let cond = condition.clone();
+                let then_clone = then_body.clone();
+                let elif_clone = elif_branches.clone();
+                let else_clone = else_body.clone();
+                
+                // Evaluate @if conditions and expand accordingly
+                self.expand_if_conditional(element, &cond, &then_clone, &elif_clone, &else_clone, state)?;
+            }
             _ => {}
         }
         
@@ -105,6 +225,10 @@ impl ComponentResolver {
     }
     
     fn find_component_definition(&self, name: &str, state: &CompilerState) -> Option<ComponentDefinition> {
+        println!("DEBUG: Looking for component '{}' in {} available components:", name, state.component_defs.len());
+        for comp in &state.component_defs {
+            println!("  Available component: {}", comp.name);
+        }
         state.component_defs.iter()
             .find(|comp| comp.name == name)
             .cloned()
@@ -133,6 +257,8 @@ impl ComponentResolver {
             // Push component scope and add component properties
             state.variable_context.push_scope(VariableScope::Component);
             
+            println!("DEBUG: Instantiating component '{}' with properties:", component_def.name);
+            
             // Add component properties to variable context
             for prop_def in &component_def.properties {
                 // Strip quotes from default values for variable substitution
@@ -144,10 +270,11 @@ impl ComponentResolver {
                 
                 state.variable_context.add_string_variable(
                     prop_def.name.clone(),
-                    clean_default,
+                    clean_default.clone(),
                     state.current_file_path.clone(),
                     0 // TODO: get actual line from component definition
                 )?;
+                println!("  Added property: {} = {}", prop_def.name, clean_default);
             }
             
             // Override with instance properties
@@ -166,14 +293,19 @@ impl ComponentResolver {
                 
                 state.variable_context.add_string_variable(
                     instance_prop.key.clone(),
-                    clean_value,
+                    clean_value.clone(),
                     state.current_file_path.clone(),
                     instance_prop.line
                 )?;
+                println!("  Overrode property: {} = {}", instance_prop.key, clean_value);
             }
             
             // Clone and customize the template using the variable context
             let mut instantiated_template = template.clone();
+            
+            // Process template structures (like @for) now that variables are available
+            self.process_template_in_element(&mut instantiated_template, state)?;
+            
             self.apply_variable_substitution(&mut instantiated_template, state)?;
             
             // Handle instance children (slot content)
@@ -186,6 +318,9 @@ impl ComponentResolver {
             
             // Resolve component function templates while in component scope
             self.resolve_component_function_templates(&component_def.name, state)?;
+            
+            // Process deferred component scripts while in component scope
+            self.process_component_scripts(&component_def.name, state)?;
             
             // Recursively resolve any nested components
             self.resolve_element_components(element, state)?;
@@ -523,6 +658,219 @@ impl ComponentResolver {
         }
         
         Ok(())
+    }
+    
+    /// Process deferred component scripts with variable substitution
+    fn process_component_scripts(
+        &self,
+        component_name: &str,
+        state: &mut CompilerState
+    ) -> Result<()> {
+        println!("DEBUG: Processing component scripts for: {}", component_name);
+        println!("DEBUG: Available component scripts: {:?}", state.component_scripts.keys().collect::<Vec<_>>());
+        
+        // Get deferred scripts for this component
+        if let Some(script_nodes) = state.component_scripts.get(component_name).cloned() {
+            println!("DEBUG: Found {} stored scripts for component {}", script_nodes.len(), component_name);
+            for (i, script_node) in script_nodes.iter().enumerate() {
+                if matches!(script_node, crate::ast::AstNode::Script { .. }) {
+                    println!("DEBUG: Processing script {} for component {}", i, component_name);
+                    // Process the script with current variable context (component variables available)
+                    let script_processor = crate::script::ScriptProcessor::new();
+                    let script_entry = script_processor.process_script(&script_node, state)?;
+                    state.scripts.push(script_entry);
+                    println!("DEBUG: Successfully processed script {} for component {}", i, component_name);
+                }
+            }
+        } else {
+            println!("DEBUG: No stored scripts found for component {}", component_name);
+        }
+        
+        Ok(())
+    }
+    
+    /// Expand @for loop into multiple elements
+    fn expand_for_loop(
+        &mut self,
+        element: &mut AstNode,
+        variable: &str,
+        collection: &str,
+        body: &Vec<AstNode>,
+        state: &mut CompilerState,
+    ) -> Result<()> {
+        // Parse the collection - can be a comma-separated list or a property reference
+        let items: Vec<String> = if collection.contains(',') {
+            // Comma-separated list: "Option 1,Option 2,Option 3"
+            collection.split(',')
+                .map(|item| item.trim().to_string())
+                .collect()
+        } else {
+            // Property reference - look up in variable context
+            // Strip $ prefix if present for variable lookup
+            let lookup_name = if collection.starts_with('$') {
+                &collection[1..]
+            } else {
+                collection
+            };
+            match state.variable_context.get_variable(lookup_name) {
+                Some(var_entry) => {
+                    println!("DEBUG: Found variable '{}' with value '{}'", lookup_name, var_entry.value);
+                    let var_value = &var_entry.value;
+                    // If it's a comma-separated string, split it
+                    if var_value.contains(',') {
+                        var_value.split(',')
+                            .map(|item| item.trim().to_string())
+                            .collect()
+                    } else {
+                        // Single item
+                        vec![var_value.clone()]
+                    }
+                }
+                None => {
+                    // If variable not found, try to use the collection name as a literal comma-separated list
+                    // This allows for fallback when component properties aren't resolved yet
+                    if collection.contains(',') {
+                        collection.split(',')
+                            .map(|item| item.trim().to_string())
+                            .collect()
+                    } else {
+                        // Use the collection name as a single item
+                        vec![collection.to_string()]
+                    }
+                }
+            }
+        };
+        
+        // Generate elements for each item in the collection
+        let mut expanded_elements = Vec::new();
+        
+        for (index, item) in items.iter().enumerate() {
+            // Push a new scope for this iteration
+            state.variable_context.push_scope(VariableScope::Function);
+            
+            // Add the loop variable and index
+            state.variable_context.add_string_variable(
+                variable.to_string(),
+                item.clone(),
+                state.current_file_path.clone(),
+                0,
+            )?;
+            
+            state.variable_context.add_string_variable(
+                format!("{}_index", variable),
+                (index + 1).to_string(),
+                state.current_file_path.clone(),
+                0,
+            )?;
+            
+            state.variable_context.add_string_variable(
+                format!("{}_index0", variable),
+                index.to_string(),
+                state.current_file_path.clone(),
+                0,
+            )?;
+            
+            // Clone and process the body for this iteration
+            for body_element in body {
+                let mut element_clone = body_element.clone();
+                // Apply variable substitution for all variables (component + iteration)
+                self.apply_variable_substitution(&mut element_clone, state)?;
+                // Don't recursively resolve components yet - just create the elements
+                expanded_elements.push(element_clone);
+            }
+            
+            // Pop the iteration scope
+            state.variable_context.pop_scope()?;
+        }
+        
+        // Replace the @for node with a container holding all expanded elements
+        *element = AstNode::Element {
+            element_type: "Container".to_string(),
+            properties: vec![],
+            pseudo_selectors: vec![],
+            children: expanded_elements,
+        };
+        
+        Ok(())
+    }
+    
+    /// Expand @if conditional into appropriate elements
+    fn expand_if_conditional(
+        &mut self,
+        element: &mut AstNode,
+        condition: &str,
+        then_body: &Vec<AstNode>,
+        elif_branches: &Vec<(String, Vec<AstNode>)>,
+        else_body: &Option<Vec<AstNode>>,
+        state: &mut CompilerState,
+    ) -> Result<()> {
+        // Evaluate the main condition
+        let condition_result = self.evaluate_condition(condition, state)?;
+        
+        let chosen_body = if condition_result {
+            // Main condition is true
+            Some(then_body.as_slice())
+        } else {
+            // Check elif branches
+            let mut found_true_elif = false;
+            let mut elif_body = None;
+            
+            for (elif_condition, elif_body_ref) in elif_branches {
+                if self.evaluate_condition(elif_condition, state)? {
+                    elif_body = Some(elif_body_ref.as_slice());
+                    found_true_elif = true;
+                    break;
+                }
+            }
+            
+            if found_true_elif {
+                elif_body
+            } else {
+                // Use else body if available
+                else_body.as_ref().map(|v| v.as_slice())
+            }
+        };
+        
+        // Generate elements based on the chosen body
+        let expanded_elements = if let Some(body) = chosen_body {
+            let mut elements = Vec::new();
+            for body_element in body {
+                let mut element_clone = body_element.clone();
+                self.apply_variable_substitution(&mut element_clone, state)?;
+                self.resolve_element_components(&mut element_clone, state)?;
+                elements.push(element_clone);
+            }
+            elements
+        } else {
+            // No condition matched and no else body - return empty
+            Vec::new()
+        };
+        
+        // Replace the @if node with a container holding the chosen elements
+        *element = AstNode::Element {
+            element_type: "Container".to_string(),
+            properties: vec![],
+            pseudo_selectors: vec![],
+            children: expanded_elements,
+        };
+        
+        Ok(())
+    }
+    
+    /// Evaluate a condition string - for now, just basic variable truthiness
+    fn evaluate_condition(&self, condition: &str, state: &CompilerState) -> Result<bool> {
+        // Simple condition evaluation - check if variable exists and is truthy
+        if let Some(var_entry) = state.variable_context.get_variable(condition) {
+            // Check for common falsy values
+            let result = match var_entry.value.to_lowercase().as_str() {
+                "false" | "0" | "" | "null" | "undefined" => false,
+                _ => true,
+            };
+            Ok(result)
+        } else {
+            // Variable doesn't exist - treat as false
+            Ok(false)
+        }
     }
 }
 

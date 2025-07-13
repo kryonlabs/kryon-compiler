@@ -68,6 +68,22 @@ pub enum AstNode {
         pseudo_selectors: Vec<PseudoSelector>,
         children: Vec<AstNode>,
     },
+    
+    /// Template control flow structures
+    /// @for loop: @for item in collection
+    For {
+        variable: String,
+        collection: String, // Can be a property name or comma-separated list
+        body: Vec<AstNode>,
+    },
+    
+    /// @if conditional: @if condition
+    If {
+        condition: String,
+        then_body: Vec<AstNode>,
+        elif_branches: Vec<(String, Vec<AstNode>)>, // (condition, body) pairs
+        else_body: Option<Vec<AstNode>>,
+    },
 }
 
 /// Property in AST

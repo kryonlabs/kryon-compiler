@@ -202,6 +202,13 @@ impl VariableContext {
                 if let Some(var_entry) = self.get_variable(var_name) {
                     result = result.replace(var_match.as_str(), &var_entry.value);
                 } else {
+                    println!("DEBUG: Variable substitution failed for '{}' in context:", var_name);
+                    println!("  Input string: {}", input);
+                    println!("  Current scope: {:?}", self.current_scope);
+                    println!("  Available variables in all scopes:");
+                    for var in self.get_all_variables() {
+                        println!("    {} = {} (scope: {:?})", var.name, var.value, var.scope);
+                    }
                     return Err(CompilerError::variable_legacy(
                         0,
                         format!("Undefined variable: {}", var_name)

@@ -222,9 +222,12 @@ impl PropertyId {
             "aspect_ratio" => PropertyId::AspectRatio,             // 0x16
             "transform" => PropertyId::Transform,                  // 0x17
             "shadow" => PropertyId::Shadow,                        // 0x18
-            "overflow" => PropertyId::Overflow,                    // 0x19
-            "width" => PropertyId::Width,                          // 0x1A
-            "height" => PropertyId::Height,                        // 0x1C
+            "box_shadow" => PropertyId::Shadow,                    // 0x18 (alias)
+            "overflow" => PropertyId::Overflow,                    // 0x8B
+            "overflow-x" => PropertyId::OverflowX,                 // 0x8C
+            "overflow-y" => PropertyId::OverflowY,                 // 0x8D
+            "width" => PropertyId::Width,                          // 0x19
+            "height" => PropertyId::Height,                        // 0x1A
             "cursor" => PropertyId::Cursor,                        // 0x29
             "checked" => PropertyId::Checked,                      // 0x2A
             "type" => PropertyId::InputType,                       // 0x2B
@@ -233,7 +236,7 @@ impl PropertyId {
             "window_width" => PropertyId::WindowWidth,             // 0x20
             "window_height" => PropertyId::WindowHeight,           // 0x21
             "window_title" => PropertyId::WindowTitle,             // 0x22
-            "resizable" => PropertyId::Resizable,                  // 0x23
+            "resizable" | "window_resizable" => PropertyId::Resizable,                  // 0x23
             "keep_aspect_ratio" => PropertyId::KeepAspect,         // 0x24
             "scale_factor" => PropertyId::ScaleFactor,             // 0x25
             "icon" => PropertyId::Icon,                            // 0x26
@@ -353,9 +356,8 @@ pub enum PropertyId {
     AspectRatio = 0x16,
     Transform = 0x17,
     Shadow = 0x18,
-    Overflow = 0x19,
-    Width = 0x1A,
-    Height = 0x1C,
+    Width = 0x19,
+    Height = 0x1A,
     CustomData = 0x1D,
     // App-specific properties
     WindowWidth = 0x20,
@@ -415,6 +417,11 @@ pub enum PropertyId {
     OutlineColor = 0x88,
     OutlineWidth = 0x89,
     OutlineOffset = 0x8A,
+    
+    // Overflow properties
+    Overflow = 0x8B,
+    OverflowX = 0x8C,
+    OverflowY = 0x8D,
     
     // Taffy Modern Flexbox Properties (0x40-0x4F)
     Display = 0x40,
@@ -935,6 +942,9 @@ pub struct CompilerState {
     pub resolved_functions: HashMap<String, ResolvedFunction>,
     pub component_functions: HashMap<String, Vec<String>>, // Component instance -> [func names]
     pub next_template_id: usize,
+    
+    // Deferred component scripts
+    pub component_scripts: HashMap<String, Vec<crate::ast::AstNode>>, // Component name -> [script nodes]
 }
 
 impl CompilerState {
@@ -981,6 +991,7 @@ impl CompilerState {
             resolved_functions: HashMap::new(),
             component_functions: HashMap::new(),
             next_template_id: 0,
+            component_scripts: HashMap::new(),
         }
     }
     

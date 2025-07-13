@@ -32,6 +32,14 @@ pub enum TokenType {
     Script,
     Function,
     
+    // Template control flow
+    For,
+    If,
+    Elif,
+    Else,
+    End,
+    In,
+    
     // Operators and punctuation
     LeftBrace,    // {
     RightBrace,   // }
@@ -120,6 +128,12 @@ impl fmt::Display for TokenType {
             TokenType::Variables => write!(f, "@variables"),
             TokenType::Script => write!(f, "@script"),
             TokenType::Function => write!(f, "@function"),
+            TokenType::For => write!(f, "@for"),
+            TokenType::If => write!(f, "@if"),
+            TokenType::Elif => write!(f, "@elif"),
+            TokenType::Else => write!(f, "@else"),
+            TokenType::End => write!(f, "@end"),
+            TokenType::In => write!(f, "in"),
             TokenType::LeftBrace => write!(f, "{{"),
             TokenType::RightBrace => write!(f, "}}"),
             TokenType::LeftBracket => write!(f, "["),
@@ -462,6 +476,11 @@ impl Lexer {
                         // For @function, we need to read the script content specially
                         TokenType::Function
                     },
+                    "@for" => TokenType::For,
+                    "@if" => TokenType::If,
+                    "@elif" => TokenType::Elif,
+                    "@else" => TokenType::Else,
+                    "@end" => TokenType::End,
                     _ => return Err(self.parse_error(
                         format!("Unknown directive: {}", directive)
                     )),
@@ -747,7 +766,7 @@ impl Lexer {
         identifier.push(first_char);
         
         while let Some(ch) = self.peek() {
-            if ch.is_alphanumeric() || ch == '_' {
+            if ch.is_alphanumeric() || ch == '_' || ch == '-' {
                 identifier.push(ch);
                 self.advance();
             } else {
@@ -782,6 +801,7 @@ impl Lexer {
             "font" => TokenType::Font,
             "Define" => TokenType::Define,
             "Properties" => TokenType::Properties,
+            "in" => TokenType::In,
             
             // Boolean literals
             "true" => TokenType::Boolean(true),

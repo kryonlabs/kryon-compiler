@@ -53,6 +53,16 @@ impl Parser {
                 TokenType::Function => {
                     scripts.push(self.parse_function()?);
                 }
+                TokenType::For => {
+                    // @for can appear at root level for generating multiple elements
+                    let for_node = self.parse_for()?;
+                    standalone_elements.push(for_node);
+                }
+                TokenType::If => {
+                    // @if can appear at root level for conditional elements
+                    let if_node = self.parse_if()?;
+                    standalone_elements.push(if_node);
+                }
                 TokenType::Style => {
                     styles.push(self.parse_style()?);
                 }
@@ -667,6 +677,10 @@ impl Parser {
                     properties.push(self.parse_property()?);
                 } else if self.is_element_start() {
                     children.push(self.parse_element()?);
+                } else if matches!(self.peek().token_type, TokenType::For) {
+                    children.push(self.parse_for()?);
+                } else if matches!(self.peek().token_type, TokenType::If) {
+                    children.push(self.parse_if()?);
                 } else {
                     return Err(CompilerError::parse_legacy(
                         self.peek().line,
@@ -1304,6 +1318,234 @@ impl Parser {
             }
             _ => Err(CompilerError::parse("Unknown".to_string(), 0, "Expected expression"))
         }
+    }
+    
+    /// Parse @for loop: @for variable in collection ... @end
+    fn parse_for(&mut self) -> Result<AstNode> {
+        self.consume(TokenType::For, "Expected '@for'")?;
+        
+        // Parse variable name
+        let variable = match &self.peek().token_type {
+            TokenType::Identifier(name) => {
+                let var = name.clone();
+                self.advance();
+                var
+            }
+            _ => return Err(CompilerError::parse_legacy(
+                self.peek().line,
+                "Expected variable name after '@for'"
+            )),
+        };
+        
+        // Parse 'in' keyword
+        self.consume(TokenType::In, "Expected 'in' after variable name")?;
+        
+        // Parse collection (can be a property name, variable reference, or comma-separated list)
+        let collection = match &self.peek().token_type {
+            TokenType::Identifier(name) => {
+                let col = name.clone();
+                self.advance();
+                col
+            }
+            TokenType::String(s) => {
+                let col = s.clone();
+                self.advance();
+                col
+            }
+            TokenType::Dollar => {
+                // Handle $variable syntax
+                self.advance(); // consume $
+                match &self.peek().token_type {
+                    TokenType::Identifier(var_name) => {
+                        let col = var_name.clone(); // Store the variable name without $
+                        self.advance();
+                        col
+                    }
+                    _ => return Err(CompilerError::parse_legacy(
+                        self.peek().line,
+                        "Expected variable name after '$'"
+                    )),
+                }
+            }
+            _ => return Err(CompilerError::parse_legacy(
+                self.peek().line,
+                "Expected collection name, variable reference, or string after 'in'"
+            )),
+        };
+        
+        // Parse body until @end
+        let mut body = Vec::new();
+        while !self.check(&TokenType::End) && !self.is_at_end() {
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            if matches!(self.peek().token_type, TokenType::Comment(_)) {
+                self.advance();
+                continue;
+            }
+            
+            if self.is_element_start() {
+                body.push(self.parse_element()?);
+            } else if matches!(self.peek().token_type, TokenType::For) {
+                body.push(self.parse_for()?);
+            } else if matches!(self.peek().token_type, TokenType::If) {
+                body.push(self.parse_if()?);
+            } else {
+                return Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    format!("Unexpected token in @for body: {}", self.peek().token_type)
+                ));
+            }
+        }
+        
+        self.consume(TokenType::End, "Expected '@end' after @for body")?;
+        
+        Ok(AstNode::For {
+            variable,
+            collection,
+            body,
+        })
+    }
+    
+    /// Parse @if conditional: @if condition ... [@elif condition ...] [@else ...] @end
+    fn parse_if(&mut self) -> Result<AstNode> {
+        self.consume(TokenType::If, "Expected '@if'")?;
+        
+        // Parse condition
+        let condition = match &self.peek().token_type {
+            TokenType::Identifier(name) => {
+                let cond = name.clone();
+                self.advance();
+                cond
+            }
+            TokenType::String(s) => {
+                let cond = s.clone();
+                self.advance();
+                cond
+            }
+            _ => return Err(CompilerError::parse_legacy(
+                self.peek().line,
+                "Expected condition after '@if'"
+            )),
+        };
+        
+        // Parse then body
+        let mut then_body = Vec::new();
+        while !self.check(&TokenType::Elif) && !self.check(&TokenType::Else) && !self.check(&TokenType::End) && !self.is_at_end() {
+            if self.match_token(&TokenType::Newline) {
+                continue;
+            }
+            if matches!(self.peek().token_type, TokenType::Comment(_)) {
+                self.advance();
+                continue;
+            }
+            
+            if self.is_element_start() {
+                then_body.push(self.parse_element()?);
+            } else if matches!(self.peek().token_type, TokenType::For) {
+                then_body.push(self.parse_for()?);
+            } else if matches!(self.peek().token_type, TokenType::If) {
+                then_body.push(self.parse_if()?);
+            } else {
+                return Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    format!("Unexpected token in @if body: {}", self.peek().token_type)
+                ));
+            }
+        }
+        
+        // Parse elif branches
+        let mut elif_branches = Vec::new();
+        while self.check(&TokenType::Elif) {
+            self.advance(); // consume @elif
+            
+            // Parse elif condition
+            let elif_condition = match &self.peek().token_type {
+                TokenType::Identifier(name) => {
+                    let cond = name.clone();
+                    self.advance();
+                    cond
+                }
+                TokenType::String(s) => {
+                    let cond = s.clone();
+                    self.advance();
+                    cond
+                }
+                _ => return Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    "Expected condition after '@elif'"
+                )),
+            };
+            
+            // Parse elif body
+            let mut elif_body = Vec::new();
+            while !self.check(&TokenType::Elif) && !self.check(&TokenType::Else) && !self.check(&TokenType::End) && !self.is_at_end() {
+                if self.match_token(&TokenType::Newline) {
+                    continue;
+                }
+                if matches!(self.peek().token_type, TokenType::Comment(_)) {
+                    self.advance();
+                    continue;
+                }
+                
+                if self.is_element_start() {
+                    elif_body.push(self.parse_element()?);
+                } else if matches!(self.peek().token_type, TokenType::For) {
+                    elif_body.push(self.parse_for()?);
+                } else if matches!(self.peek().token_type, TokenType::If) {
+                    elif_body.push(self.parse_if()?);
+                } else {
+                    return Err(CompilerError::parse_legacy(
+                        self.peek().line,
+                        format!("Unexpected token in @elif body: {}", self.peek().token_type)
+                    ));
+                }
+            }
+            
+            elif_branches.push((elif_condition, elif_body));
+        }
+        
+        // Parse optional else branch
+        let else_body = if self.check(&TokenType::Else) {
+            self.advance(); // consume @else
+            
+            let mut else_body = Vec::new();
+            while !self.check(&TokenType::End) && !self.is_at_end() {
+                if self.match_token(&TokenType::Newline) {
+                    continue;
+                }
+                if matches!(self.peek().token_type, TokenType::Comment(_)) {
+                    self.advance();
+                    continue;
+                }
+                
+                if self.is_element_start() {
+                    else_body.push(self.parse_element()?);
+                } else if matches!(self.peek().token_type, TokenType::For) {
+                    else_body.push(self.parse_for()?);
+                } else if matches!(self.peek().token_type, TokenType::If) {
+                    else_body.push(self.parse_if()?);
+                } else {
+                    return Err(CompilerError::parse_legacy(
+                        self.peek().line,
+                        format!("Unexpected token in @else body: {}", self.peek().token_type)
+                    ));
+                }
+            }
+            
+            Some(else_body)
+        } else {
+            None
+        };
+        
+        self.consume(TokenType::End, "Expected '@end' after @if")?;
+        
+        Ok(AstNode::If {
+            condition,
+            then_body,
+            elif_branches,
+            else_body,
+        })
     }
 }
 

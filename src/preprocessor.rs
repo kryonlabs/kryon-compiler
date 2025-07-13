@@ -38,12 +38,6 @@ impl Preprocessor {
         }
     }
 
-    /// Process @include directives recursively and return combined content with source map
-    /// (Legacy method - maintains backward compatibility)
-    pub fn process_includes(&mut self, file_path: &str) -> Result<(String, SourceMap)> {
-        let content = self.process_includes_recursive(file_path, 0)?;
-        Ok((content, self.source_map.clone()))
-    }
     
     /// NEW: Process includes with module isolation
     /// Each @include creates an isolated module context
@@ -190,120 +184,6 @@ impl Preprocessor {
         Ok(())
     }
 
-    fn process_includes_recursive(&mut self, file_path: &str, depth: usize) -> Result<String> {
-        if depth > MAX_INCLUDE_DEPTH {
-            return Err(CompilerError::Include {
-                message: format!("Maximum include depth ({}) exceeded processing '{}'", 
-                                MAX_INCLUDE_DEPTH, file_path),
-            });
-        }
-
-        // Resolve to absolute path to prevent circular includes
-        let canonical_path = fs::canonicalize(file_path).map_err(|e| {
-            CompilerError::FileNotFound {
-                path: format!("{}: {}", file_path, e),
-            }
-        })?;
-
-        // Check for circular includes
-        if self.included_files.contains(&canonical_path) {
-            return Err(CompilerError::Include {
-                message: format!("Circular include detected: '{}'", file_path),
-            });
-        }
-
-        self.included_files.insert(canonical_path.clone());
-
-        // Read the file
-        let content = fs::read_to_string(&canonical_path).map_err(|e| {
-            CompilerError::FileNotFound {
-                path: format!("{}: {}", file_path, e),
-            }
-        })?;
-
-        // Process includes in this file
-        let base_dir = canonical_path.parent().unwrap_or(Path::new(""));
-        let processed_content = self.process_content(&content, base_dir, file_path, depth)?;
-
-        self.included_files.remove(&canonical_path);
-        Ok(processed_content)
-    }
-
-    fn process_content(&mut self, content: &str, base_dir: &Path, current_file: &str, depth: usize) -> Result<String> {
-        let mut result = String::new();
-        let mut line_num = 0;
-        let lines: Vec<&str> = content.lines().collect();
-
-        for line in &lines {
-            line_num += 1;
-            let trimmed = line.trim_start();
-
-            if let Some(include_path) = self.parse_include_line(trimmed, line_num)? {
-                // Resolve include path relative to current file
-                let full_include_path = if Path::new(&include_path).is_absolute() {
-                    include_path.clone()
-                } else {
-                    base_dir.join(&include_path).to_string_lossy().to_string()
-                };
-
-                log::debug!("Processing include: {} -> {}", include_path, full_include_path);
-
-                // Check if we've already processed this file
-                let canonical_include_path = fs::canonicalize(&full_include_path).map_err(|e| {
-                    CompilerError::FileNotFound {
-                        path: format!("{}: {}", full_include_path, e),
-                    }
-                })?;
-                
-                let included_content = if let Some(_cached_content) = self.processed_file_cache.get(&canonical_include_path) {
-                    // File already included - just add a comment instead of duplicating content
-                    log::debug!("Using cached content for: {}", full_include_path);
-                    format!("# Already included: {}", include_path)
-                } else {
-                    // Process the file and cache the result
-                    match self.process_includes_recursive(&full_include_path, depth + 1) {
-                        Ok(content) => {
-                            self.processed_file_cache.insert(canonical_include_path, content.clone());
-                            content
-                        }
-                        Err(e) => {
-                            return Err(CompilerError::Include {
-                                message: format!("Error processing include '{}' at line {}: {}", 
-                                               include_path, line_num, e),
-                            });
-                        }
-                    }
-                };
-                
-                // Add source mapping for each line from the included file
-                for (i, _) in included_content.lines().enumerate() {
-                    self.source_map.add_line_mapping(
-                        self.combined_line_count + i + 1, 
-                        &full_include_path, 
-                        i + 1
-                    );
-                }
-                
-                // Update combined line count for the included content
-                let included_line_count = included_content.lines().count();
-                self.combined_line_count += included_line_count;
-                
-                result.push_str(&included_content);
-                if !included_content.ends_with('\n') && !included_content.is_empty() {
-                    result.push('\n');
-                    self.combined_line_count += 1;
-                }
-            } else {
-                // Regular line - add to source mapping and result
-                self.source_map.add_line_mapping(self.combined_line_count, current_file, line_num);
-                result.push_str(line);
-                result.push('\n');
-                self.combined_line_count += 1;
-            }
-        }
-
-        Ok(result)
-    }
 
     /// Parse an @include line and extract the file path
     /// Returns None if this isn't a valid include line
@@ -405,18 +285,6 @@ impl Preprocessor {
     }
 }
 
-/// Convenience function to preprocess a file with includes
-pub fn preprocess_file(file_path: &str) -> Result<(String, SourceMap)> {
-    let mut preprocessor = Preprocessor::new();
-    preprocessor.process_includes(file_path)
-}
-
-/// Legacy function for backward compatibility
-pub fn preprocess_file_legacy(file_path: &str) -> Result<String> {
-    let mut preprocessor = Preprocessor::new();
-    let (content, _) = preprocessor.process_includes(file_path)?;
-    Ok(content)
-}
 
 #[cfg(test)]
 mod tests {
