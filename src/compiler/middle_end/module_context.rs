@@ -3,9 +3,9 @@
 //! This module provides the core data structures for module-level isolation,
 //! where each @include creates its own isolated context with its own variables,
 //! styles, and components.
-
+//! 
+use crate::core::{ComponentPropertyDef, VariableDef}; 
 use crate::error::{CompilerError, Result};
-use crate::types::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 

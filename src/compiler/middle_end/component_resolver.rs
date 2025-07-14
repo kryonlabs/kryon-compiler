@@ -1,11 +1,14 @@
 //! Component instantiation and resolution system
 
-use crate::ast::*;
+use crate::compiler::frontend::ast::*;
+use crate::compiler::middle_end::script::ScriptProcessor;
 use crate::error::{CompilerError, Result};
-use crate::types::*;
-use crate::variable_context::VariableScope;
+use crate::core::*;
+use crate::core::types::*;
+use crate::compiler::middle_end::variable_context::VariableScope;
 use std::collections::HashMap;
 use regex;
+use crate::core::{FunctionScope, ResolvedFunction};
 
 pub struct ComponentResolver {
     instantiation_stack: Vec<String>, // Track instantiation to detect recursion
@@ -597,7 +600,6 @@ impl ComponentResolver {
         component_name: &str, 
         state: &mut CompilerState
     ) -> Result<()> {
-        use crate::types::{FunctionScope, ResolvedFunction};
         
         // Find all function templates for this component
         let component_templates: Vec<_> = state.function_templates
@@ -673,10 +675,10 @@ impl ComponentResolver {
         if let Some(script_nodes) = state.component_scripts.get(component_name).cloned() {
             println!("DEBUG: Found {} stored scripts for component {}", script_nodes.len(), component_name);
             for (i, script_node) in script_nodes.iter().enumerate() {
-                if matches!(script_node, crate::ast::AstNode::Script { .. }) {
+                if matches!(script_node, AstNode::Script { .. }) {
                     println!("DEBUG: Processing script {} for component {}", i, component_name);
                     // Process the script with current variable context (component variables available)
-                    let script_processor = crate::script::ScriptProcessor::new();
+                    let script_processor = ScriptProcessor::new();
                     let script_entry = script_processor.process_script(&script_node, state)?;
                     state.scripts.push(script_entry);
                     println!("DEBUG: Successfully processed script {} for component {}", i, component_name);

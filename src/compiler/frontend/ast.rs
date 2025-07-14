@@ -1,6 +1,7 @@
 //! Abstract Syntax Tree types for the Kryon compiler
 
-use crate::types::*;
+use crate::core::*;
+use crate::core::types::*;
 use std::collections::HashMap;
 
 /// AST node types
@@ -334,7 +335,7 @@ impl AstProperty {
     /// Get the cleaned value (without quotes if it was quoted)
     pub fn cleaned_value(&self) -> String {
         match &self.value {
-            PropertyValue::String(s) => crate::utils::clean_and_quote_value(s).0,
+            PropertyValue::String(s) => clean_and_quote_value(s).0,
             _ => self.value.to_string(),
         }
     }
@@ -342,7 +343,7 @@ impl AstProperty {
     /// Check if this property value was quoted
     pub fn was_quoted(&self) -> bool {
         match &self.value {
-            PropertyValue::String(s) => crate::utils::clean_and_quote_value(s).1,
+            PropertyValue::String(s) => clean_and_quote_value(s).1,
             _ => false,
         }
     }

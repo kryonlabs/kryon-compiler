@@ -1,7 +1,8 @@
 //! Optimization passes for KRB generation
 
 use crate::error::{CompilerError, Result};
-use crate::types::*;
+use crate::core::*;
+use crate::core::types::*;
 use std::collections::{HashMap, HashSet};
 
 pub struct Optimizer {

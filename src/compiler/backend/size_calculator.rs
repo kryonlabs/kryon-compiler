@@ -1,7 +1,8 @@
 //! Calculate sizes and offsets for KRB generation
 
 use crate::error::{CompilerError, Result};
-use crate::types::*;
+use crate::core::*;
+use crate::core::types::*;
 
 pub struct SizeCalculator;
 
@@ -391,27 +392,27 @@ impl SizeCalculator {
                 for property in &style.properties {
                     match property.property_id {
                         0x1A => { // PropertyId::Width
-                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                            if property.value_type as u8 == ValueType::Short as u8 && property.size == 2 {
                                 let width = u16::from_le_bytes([property.value[0], property.value[1]]);
                                 state.elements[element_index].width = width;
                             }
                         },
                         0x1C => { // PropertyId::Height
-                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                            if property.value_type as u8 == ValueType::Short as u8 && property.size == 2 {
                                 let height = u16::from_le_bytes([property.value[0], property.value[1]]);
                                 state.elements[element_index].height = height;
                             }
                         },
-                        0x51 => { // PropertyId::Top -> pos_y
-                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
-                                let pos_y = u16::from_le_bytes([property.value[0], property.value[1]]);
-                                state.elements[element_index].pos_y = pos_y;
-                            }
-                        },
-                        0x54 => { // PropertyId::Left -> pos_x
-                            if property.value_type as u8 == crate::types::ValueType::Short as u8 && property.size == 2 {
+                        0x51 => { // PropertyId::Left -> pos_x
+                            if property.value_type as u8 == ValueType::Short as u8 && property.size == 2 {
                                 let pos_x = u16::from_le_bytes([property.value[0], property.value[1]]);
                                 state.elements[element_index].pos_x = pos_x;
+                            }
+                        },
+                        0x52 => { // PropertyId::Top -> pos_y
+                            if property.value_type as u8 == ValueType::Short as u8 && property.size == 2 {
+                                let pos_y = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                state.elements[element_index].pos_y = pos_y;
                             }
                         },
                         _ => {} // Ignore other properties

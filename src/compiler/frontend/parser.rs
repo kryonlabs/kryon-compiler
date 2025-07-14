@@ -1,8 +1,8 @@
 //! Recursive descent parser for the KRY language
 
-use crate::ast::*;
+use crate::compiler::frontend::ast::*;
 use crate::error::{CompilerError, Result};
-use crate::lexer::{Token, TokenType};
+use crate::compiler::frontend::lexer::{Token, TokenType};
 use std::collections::HashMap;
 use regex::Regex;
 
@@ -1552,7 +1552,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Lexer;
+    use crate::compiler::frontend::lexer::Lexer;
     
     #[test]
     fn test_parse_simple_app() {

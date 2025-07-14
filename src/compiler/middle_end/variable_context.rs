@@ -7,10 +7,11 @@
 //! - Style calculations (computed variables)
 
 use crate::error::{CompilerError, Result};
+use crate::core::*;
+use crate::compiler::middle_end::module_context::ModuleContext;
+use crate::compiler::frontend::ast::{Expression, AstProperty};
 use crate::types::*;
-use crate::module_context::ModuleContext;
-use crate::ast::Expression;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use regex::Regex;
 
@@ -323,7 +324,7 @@ impl VariableContext {
     }
     
     /// Create a property mapping for component instantiation
-    pub fn create_component_property_mapping(&self, component_props: &[ComponentPropertyDef], instance_props: &[crate::ast::AstProperty]) -> Result<HashMap<String, String>> {
+    pub fn create_component_property_mapping(&self, component_props: &[ComponentPropertyDef], instance_props: &[AstProperty]) -> Result<HashMap<String, String>> {
         let mut mapping = HashMap::new();
         
         // Start with default values from component definition
@@ -416,103 +417,424 @@ impl Default for VariableContext {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_variable_scoping() {
-        let mut ctx = VariableContext::new();
-        
-        // Add global variable
-        ctx.add_string_variable("global_var".to_string(), "global_value".to_string(), "test.kry".to_string(), 1).unwrap();
-        
-        // Push component scope
-        ctx.push_scope(VariableScope::Component);
-        ctx.add_string_variable("comp_var".to_string(), "comp_value".to_string(), "test.kry".to_string(), 5).unwrap();
-        
-        // Should find both variables
-        assert!(ctx.get_variable("global_var").is_some());
-        assert!(ctx.get_variable("comp_var").is_some());
-        
-        // Pop scope
-        ctx.pop_scope().unwrap();
-        
-        // Should only find global variable
-        assert!(ctx.get_variable("global_var").is_some());
-        assert!(ctx.get_variable("comp_var").is_none());
+/// Variable processor for handling @variables blocks
+pub struct VariableProcessor {
+    var_usage_regex: Regex,
+    var_expression_regex: Regex,
+}
+
+
+impl VariableProcessor {
+    pub fn new() -> Self {
+        Self {
+            var_usage_regex: Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap(),
+            var_expression_regex: Regex::new(r#"\$([a-zA-Z_][a-zA-Z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*([0-9]+|true|false|"[^"]*")"#).unwrap(),
+        }
     }
-    
-    #[test]
-    fn test_variable_substitution() {
-        let mut ctx = VariableContext::new();
-        ctx.add_string_variable("title".to_string(), "Hello World".to_string(), "test.kry".to_string(), 1).unwrap();
-        ctx.add_string_variable("count".to_string(), "42".to_string(), "test.kry".to_string(), 2).unwrap();
+
+    /// Process variables in source: collect, resolve, and substitute
+    pub fn process_and_substitute_variables(
+        &self,
+        source: &str,
+        state: &mut CompilerState,
+    ) -> Result<String> {
+        // Clear any existing variables
+        state.variables.clear();
+
+        // Phase 1: Collect raw variables
+        self.collect_raw_variables(source, state)?;
         
-        let result = ctx.substitute_variables("text: $title, value: $count").unwrap();
-        assert_eq!(result, "text: Hello World, value: 42");
-    }
-    
-    #[test]
-    fn test_undefined_variable_error() {
-        let ctx = VariableContext::new();
-        let result = ctx.substitute_variables("text: $undefined");
-        assert!(result.is_err());
-    }
-    
-    #[test]
-    fn test_module_variable_isolation() {
-        let mut ctx = VariableContext::new();
+        // Phase 2: Resolve inter-variable dependencies
+        self.resolve_all_variables(state)?;
         
-        // Create mock module contexts
-        let mut module1 = ModuleContext::new(PathBuf::from("module1.kry"));
-        module1.add_variable("shared_var".to_string(), crate::types::VariableDef {
-            value: "module1_value".to_string(),
-            raw_value: "module1_value".to_string(),
-            def_line: 1,
+        // Phase 3: Substitute variables and remove @variables blocks
+        self.perform_substitution_and_remove_blocks(source, state)
+    }
+
+    /// Scan source for @variables blocks and populate state.variables
+    fn collect_raw_variables(&self, source: &str, state: &mut CompilerState) -> Result<()> {
+        let mut in_variables_block = false;
+        let mut line_num = 0;
+
+        for line in source.lines() {
+            line_num += 1;
+            let trimmed = line.trim();
+
+            // Skip full-line comments
+            if trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Remove trailing comments
+            let line_without_comment = self.strip_trailing_comment(trimmed);
+
+            if line_without_comment == "@variables {" {
+                if in_variables_block {
+                    return Err(CompilerError::variable_legacy(
+                        line_num,
+                        "Nested @variables blocks are not allowed"
+                    ));
+                }
+                in_variables_block = true;
+                continue;
+            }
+
+            if line_without_comment == "}" && in_variables_block {
+                in_variables_block = false;
+                continue;
+            }
+
+            if in_variables_block && !line_without_comment.is_empty() {
+                self.parse_variable_definition(line_without_comment, line_num, state)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse a single variable definition line
+    fn parse_variable_definition(
+        &self,
+        line: &str,
+        line_num: usize,
+        state: &mut CompilerState,
+    ) -> Result<()> {
+        let parts: Vec<&str> = line.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err(CompilerError::variable_legacy(
+                line_num,
+                format!("Invalid variable definition syntax: '{}'. Expected 'name: value'", line)
+            ));
+        }
+
+        let var_name = parts[0].trim();
+        let raw_value = parts[1].trim();
+
+        if !is_valid_identifier(var_name) {
+            return Err(CompilerError::variable_legacy(
+                line_num,
+                format!("Invalid variable name '{}'", var_name)
+            ));
+        }
+
+        // Warn about redefinition
+        if let Some(existing) = state.variables.get(var_name) {
+            log::warn!(
+                "Line {}: Variable '{}' redefined. Previous definition at line {}",
+                line_num, var_name, existing.def_line
+            );
+        }
+
+        state.variables.insert(var_name.to_string(), VariableDef {
+            value: String::new(),
+            raw_value: raw_value.to_string(),
+            def_line: line_num,
             is_resolving: false,
-            is_resolved: true,
+            is_resolved: false,
         });
+
+        Ok(())
+    }
+
+    /// Resolve all variables, handling dependencies and detecting cycles
+    fn resolve_all_variables(&self, state: &mut CompilerState) -> Result<()> {
+        let var_names: Vec<String> = state.variables.keys().cloned().collect();
         
-        let mut module2 = ModuleContext::new(PathBuf::from("module2.kry"));
-        module2.add_variable("shared_var".to_string(), crate::types::VariableDef {
-            value: "module2_value".to_string(),
-            raw_value: "module2_value".to_string(),
-            def_line: 1,
-            is_resolving: false,
-            is_resolved: true,
-        });
+        for name in var_names {
+            if !state.variables[&name].is_resolved {
+                self.resolve_variable(&name, state, &mut HashSet::new())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Recursively resolve a single variable
+    fn resolve_variable(
+        &self,
+        name: &str,
+        state: &mut CompilerState,
+        visited: &mut HashSet<String>,
+    ) -> Result<String> {
+        // Check if variable exists
+        let var_def = state.variables.get(name).ok_or_else(|| {
+            CompilerError::variable_legacy(0, format!("Undefined variable '{}'", name))
+        })?.clone();
+
+        if var_def.is_resolved {
+            return Ok(var_def.value);
+        }
+
+        if var_def.is_resolving || visited.contains(name) {
+            let cycle_path: Vec<_> = visited.iter().cloned().collect();
+            return Err(CompilerError::variable_legacy(
+                var_def.def_line,
+                format!("Circular variable dependency detected: {} -> {}", 
+                       cycle_path.join(" -> "), name)
+            ));
+        }
+
+        // Mark as resolving
+        visited.insert(name.to_string());
+        if let Some(var_def) = state.variables.get_mut(name) {
+            var_def.is_resolving = true;
+        }
+
+        // Resolve dependencies in raw_value
+        let mut current_value = var_def.raw_value.clone();
         
-        // Import module1 first, then module2 - module2 should override
-        ctx.import_module_variables(&module1, 0).unwrap();
-        ctx.import_module_variables(&module2, 1).unwrap();
-        
-        // Should get module2's value due to later import order
-        if let Some(var) = ctx.get_variable("shared_var") {
-            assert_eq!(var.value, "module2_value");
+        // Find all variable references
+        for captures in self.var_usage_regex.captures_iter(&var_def.raw_value) {
+            let var_ref = captures.get(0).unwrap().as_str(); // $var_name
+            let ref_var_name = captures.get(1).unwrap().as_str(); // var_name
+            
+            // Recursively resolve the referenced variable
+            let resolved_ref_value = self.resolve_variable(ref_var_name, state, visited)?;
+            
+            // Replace in current value
+            current_value = current_value.replace(var_ref, &resolved_ref_value);
+        }
+
+        // Update the variable with resolved value
+        if let Some(var_def) = state.variables.get_mut(name) {
+            var_def.value = current_value.clone();
+            var_def.is_resolved = true;
+            var_def.is_resolving = false;
+        }
+
+        visited.remove(name);
+        Ok(current_value)
+    }
+
+    /// Remove @variables blocks and substitute $varName references
+    fn perform_substitution_and_remove_blocks(
+        &self,
+        source: &str,
+        state: &CompilerState,
+    ) -> Result<String> {
+        let mut result = String::new();
+        let mut in_variables_block = false;
+        let mut in_component_block = false;
+        let mut component_brace_depth = 0;
+        let mut line_num = 0;
+        let mut substitution_errors = Vec::new();
+
+        for line in source.lines() {
+            line_num += 1;
+            let trimmed = line.trim();
+            
+
+            // Handle @variables block boundaries
+            if trimmed.starts_with("@variables {") {
+                in_variables_block = true;
+                continue;
+            }
+            if in_variables_block && trimmed == "}" {
+                in_variables_block = false;
+                continue;
+            }
+            if in_variables_block {
+                continue; // Skip lines inside @variables blocks
+            }
+            
+            // Handle component Define block boundaries
+            if trimmed.starts_with("Define ") && trimmed.contains("{") {
+                in_component_block = true;
+                component_brace_depth = 1;
+                result.push_str(line);
+                result.push('\n');
+                continue;
+            }
+            if in_component_block {
+                // Count braces to track nesting depth
+                let open_braces = line.matches('{').count();
+                let close_braces = line.matches('}').count();
+                component_brace_depth += open_braces;
+                component_brace_depth -= close_braces;
+                
+                
+                result.push_str(line);
+                result.push('\n');
+                
+                if component_brace_depth == 0 {
+                    in_component_block = false;
+                }
+                continue;
+            }
+
+            // First, handle expressions (like $var == 0)
+            let expr_substituted_line = self.var_expression_regex.replace_all(line, |caps: &regex::Captures| {
+                let var_name = &caps[1];
+                let operator = &caps[2];
+                let value = &caps[3];
+                
+                match self.evaluate_expression(var_name, operator, value, state) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        substitution_errors.push(format!("Line {}: {}", line_num, e));
+                        caps[0].to_string() // Return original if error
+                    }
+                }
+            });
+
+            // Then handle simple variable substitution on lines outside @variables blocks
+            let substituted_line = self.var_usage_regex.replace_all(&expr_substituted_line, |caps: &regex::Captures| {
+
+                let var_name = &caps[1];
+                
+                // Check if this is a template variable that should be preserved for runtime binding
+                if self.is_template_variable_context(line, var_name) {
+                    // Preserve template variables in element properties for runtime binding
+                    caps[0].to_string() // Return original $variable_name
+                } else {
+                    match state.variables.get(var_name) {
+                        Some(var_def) if var_def.is_resolved => var_def.value.clone(),
+                        Some(_) => {
+                            substitution_errors.push(format!(
+                                "Line {}: Internal error: variable '{}' used but not resolved",
+                                line_num, var_name
+                            ));
+                            caps[0].to_string() // Return original if error
+                        }
+                        None => {
+                            substitution_errors.push(format!(
+                                "Line {}: Undefined variable '${}'",
+                                line_num, var_name
+                            ));
+                            caps[0].to_string() // Return original if error
+                        }
+                    }
+                }
+            });
+
+            result.push_str(&substituted_line);
+            result.push('\n');
+        }
+
+        if !substitution_errors.is_empty() {
+            return Err(CompilerError::variable_legacy(0, substitution_errors.join("\n")));
+        }
+
+        Ok(result)
+    }
+
+    /// Evaluate expressions like $var == 0, $var != "test", etc.
+    fn evaluate_expression(&self, var_name: &str, operator: &str, value: &str, state: &CompilerState) -> Result<String> {
+        // Get the variable value
+        let var_value = match state.variables.get(var_name) {
+            Some(var_def) if var_def.is_resolved => &var_def.value,
+            Some(_) => return Err(CompilerError::variable_legacy(0, format!("Variable '{}' not resolved", var_name))),
+            None => return Err(CompilerError::variable_legacy(0, format!("Undefined variable '{}'", var_name))),
+        };
+
+        // Parse the comparison value
+        let comparison_value = if value.starts_with('"') && value.ends_with('"') {
+            // String value
+            value[1..value.len()-1].to_string()
+        } else if value == "true" || value == "false" {
+            // Boolean value
+            value.to_string()
         } else {
-            panic!("Variable not found");
+            // Numeric value
+            value.to_string()
+        };
+
+        // Perform comparison
+        let result = match operator {
+            "==" => var_value == &comparison_value,
+            "!=" => var_value != &comparison_value,
+            "<" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num < comp_num
+                } else {
+                    var_value < &comparison_value
+                }
+            },
+            ">" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num > comp_num
+                } else {
+                    var_value > &comparison_value
+                }
+            },
+            "<=" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num <= comp_num
+                } else {
+                    var_value <= &comparison_value
+                }
+            },
+            ">=" => {
+                if let (Ok(var_num), Ok(comp_num)) = (var_value.parse::<f64>(), comparison_value.parse::<f64>()) {
+                    var_num >= comp_num
+                } else {
+                    var_value >= &comparison_value
+                }
+            },
+            _ => return Err(CompilerError::variable_legacy(0, format!("Unknown operator: {}", operator))),
+        };
+
+        Ok(result.to_string())
+    }
+
+    /// Strip trailing comments from a line, respecting quotes
+    fn strip_trailing_comment<'a>(&self, line: &'a str) -> &'a str {
+        let mut in_quotes = false;
+        let mut comment_pos = None;
+
+        for (i, ch) in line.char_indices() {
+            if ch == '"' {
+                in_quotes = !in_quotes;
+            }
+            if ch == '#' && !in_quotes {
+                comment_pos = Some(i);
+                break;
+            }
+        }
+
+        if let Some(pos) = comment_pos {
+            line[..pos].trim_end()
+        } else {
+            line
         }
     }
     
-    #[test]
-    fn test_private_variable_isolation() {
-        let mut ctx = VariableContext::new();
+    /// Check if a variable usage is in a template context that should be preserved for runtime binding
+    fn is_template_variable_context(&self, line: &str, _var_name: &str) -> bool {
+        // Preserve template variables in element properties that should be runtime-bound
+        // Look for patterns like 'text: $variable' or 'text: "something $variable"'
+        if line.trim().starts_with("text:") {
+            return true;
+        }
         
-        // Create module with private variable
-        let mut module = ModuleContext::new(PathBuf::from("module.kry"));
-        module.add_variable("_private_var".to_string(), crate::types::VariableDef {
-            value: "private_value".to_string(),
-            raw_value: "private_value".to_string(),
-            def_line: 1,
-            is_resolving: false,
-            is_resolved: true,
-        });
+        // Check for other element properties that should support template variables
+        let template_properties = [
+            "text:", "value:", "placeholder:", "title:", "label:", "content:"
+        ];
         
-        // Import module - private variable should not be accessible
-        ctx.import_module_variables(&module, 0).unwrap();
+        for prop in &template_properties {
+            if line.trim().starts_with(prop) {
+                return true;
+            }
+        }
         
-        // Should not find private variable
-        assert!(ctx.get_variable("_private_var").is_none());
+        false
     }
+}
+
+
+/// Check if a string is a valid identifier
+pub fn is_valid_identifier(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }

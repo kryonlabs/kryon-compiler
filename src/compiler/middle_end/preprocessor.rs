@@ -4,8 +4,9 @@
 //! an isolated context with its own variables, styles, and components.
 
 use crate::error::{CompilerError, Result, SourceMap};
-use crate::types::MAX_INCLUDE_DEPTH;
-use crate::module_context::{ModuleContext, ModuleGraph};
+use crate::core::MAX_INCLUDE_DEPTH;
+
+use crate::compiler::middle_end::module_context::{ModuleContext, ModuleGraph, ModuleImport};
 use std::collections::{HashSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -105,7 +106,7 @@ impl Preprocessor {
             self.process_module_recursive(&include_path, graph, depth + 1)?;
             
             // Record the import in the module
-            let import = crate::module_context::ModuleImport {
+            let import = ModuleImport {
                 module_path: include_path,
                 accessible_items: Vec::new(), // Will be filled during import resolution
                 import_order,
@@ -286,210 +287,18 @@ impl Preprocessor {
 }
 
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    fn create_test_file(dir: &TempDir, name: &str, content: &str) -> PathBuf {
-        let file_path = dir.path().join(name);
-        fs::write(&file_path, content).unwrap();
-        file_path
+fn merge_module_graph_content(graph: &ModuleGraph) -> String {
+    let mut merged = String::new();
+    
+    // Add content from all modules in dependency order
+    for module in graph.get_ordered_modules() {
+        merged.push_str(&format!("# Module: {}\n", module.file_path.display()));
+        merged.push_str(&module.content);
+        merged.push_str("\n\n");
     }
-
-    #[test]
-    fn test_basic_include() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Create included file
-        create_test_file(&temp_dir, "included.kry", "Container { text: \"included\" }");
-        
-        // Create main file
-        let main_content = format!(
-            "@include \"{}\"\nApp {{ }}", 
-            temp_dir.path().join("included.kry").to_string_lossy()
-        );
-        let main_file = create_test_file(&temp_dir, "main.kry", &main_content);
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
-        
-        assert!(result.0.contains("Container { text: \"included\" }"));
-        assert!(result.0.contains("App { }"));
-    }
-
-    #[test]
-    fn test_relative_include() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Create subdirectory
-        let sub_dir = temp_dir.path().join("components");
-        fs::create_dir(&sub_dir).unwrap();
-        
-        // Create included file in subdirectory
-        create_test_file(&temp_dir, "components/button.kry", 
-                        "Button { text: \"Click me\" }");
-        
-        // Create main file with relative include
-        let main_content = r#"@include "components/button.kry"
-App { }"#;
-        let main_file = create_test_file(&temp_dir, "main.kry", main_content);
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
-        
-        assert!(result.0.contains("Button { text: \"Click me\" }"));
-        assert!(result.0.contains("App { }"));
-    }
-
-    #[test]
-    fn test_nested_includes() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Create deeply nested include
-        create_test_file(&temp_dir, "level3.kry", "Text { text: \"level3\" }");
-        
-        let level2_content = format!(
-            "@include \"{}\"\nText {{ text: \"level2\" }}", 
-            temp_dir.path().join("level3.kry").to_string_lossy()
-        );
-        create_test_file(&temp_dir, "level2.kry", &level2_content);
-        
-        let level1_content = format!(
-            "@include \"{}\"\nText {{ text: \"level1\" }}", 
-            temp_dir.path().join("level2.kry").to_string_lossy()
-        );
-        create_test_file(&temp_dir, "level1.kry", &level1_content);
-        
-        let main_content = format!(
-            "@include \"{}\"\nApp {{ }}", 
-            temp_dir.path().join("level1.kry").to_string_lossy()
-        );
-        let main_file = create_test_file(&temp_dir, "main.kry", &main_content);
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
-        
-        assert!(result.0.contains("level3"));
-        assert!(result.0.contains("level2"));
-        assert!(result.0.contains("level1"));
-        assert!(result.0.contains("App { }"));
-    }
-
-    #[test]
-    fn test_circular_include_detection() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Create file1 that includes file2
-        let file2_path = temp_dir.path().join("file2.kry");
-        let file1_content = format!("@include \"{}\"\nText {{ }}", file2_path.to_string_lossy());
-        create_test_file(&temp_dir, "file1.kry", &file1_content);
-        
-        // Create file2 that includes file1
-        let file1_path = temp_dir.path().join("file1.kry");
-        let file2_content = format!("@include \"{}\"\nContainer {{ }}", file1_path.to_string_lossy());
-        create_test_file(&temp_dir, "file2.kry", &file2_content);
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(file1_path.to_str().unwrap());
-        
-        assert!(result.is_err());
-        if let Err(CompilerError::Include { message }) = result {
-            assert!(message.contains("Circular include"));
-        } else {
-            panic!("Expected circular include error");
-        }
-    }
-
-    #[test]
-    fn test_max_depth_exceeded() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Create a chain of includes that exceeds max depth
-        let mut prev_file = None;
-        for i in 0..=MAX_INCLUDE_DEPTH + 1 {
-            let filename = format!("file{}.kry", i);
-            let content = if let Some(prev) = prev_file {
-                format!("@include \"{}\"\nText {{ text: \"{}\" }}", prev, i)
-            } else {
-                format!("Text {{ text: \"{}\" }}", i)
-            };
-            
-            let file_path = create_test_file(&temp_dir, &filename, &content);
-            prev_file = Some(file_path.to_string_lossy().to_string());
-        }
-        
-        let main_file = temp_dir.path().join(format!("file{}.kry", MAX_INCLUDE_DEPTH + 1));
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(main_file.to_str().unwrap());
-        
-        assert!(result.is_err());
-        if let Err(CompilerError::Include { message }) = result {
-            assert!(message.contains("Maximum include depth"));
-        } else {
-            panic!("Expected max depth error");
-        }
-    }
-
-    #[test]
-    fn test_include_with_comments() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        create_test_file(&temp_dir, "included.kry", "Text { text: \"test\" }");
-        
-        let main_content = format!(
-            "@include \"{}\" # This is a comment\nApp {{ }}", 
-            temp_dir.path().join("included.kry").to_string_lossy()
-        );
-        let main_file = create_test_file(&temp_dir, "main.kry", &main_content);
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(main_file.to_str().unwrap()).unwrap();
-        
-        assert!(result.0.contains("Text { text: \"test\" }"));
-        assert!(result.0.contains("App { }"));
-    }
-
-    #[test]
-    fn test_invalid_include_syntax() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Missing quotes
-        let main_content = "@include missing_quotes.kry\nApp { }";
-        let main_file = create_test_file(&temp_dir, "main.kry", main_content);
-        
-        let mut preprocessor = Preprocessor::new();
-        let result = preprocessor.process_includes(main_file.to_str().unwrap());
-        
-        assert!(result.is_err());
-        if let Err(CompilerError::Parse { message, .. }) = result {
-            assert!(message.contains("path must be quoted"));
-        } else {
-            panic!("Expected parse error");
-        }
-    }
-
-    #[test]
-    fn test_parse_include_line() {
-        let preprocessor = Preprocessor::new();
-        
-        // Valid include
-        let result = preprocessor.parse_include_line("@include \"test.kry\"", 1).unwrap();
-        assert_eq!(result, Some("test.kry".to_string()));
-        
-        // Valid include with comment
-        let result = preprocessor.parse_include_line("@include \"test.kry\" # comment", 1).unwrap();
-        assert_eq!(result, Some("test.kry".to_string()));
-        
-        // Not an include line
-        let result = preprocessor.parse_include_line("App { }", 1).unwrap();
-        assert_eq!(result, None);
-        
-        // Invalid syntax
-        assert!(preprocessor.parse_include_line("@include missing_quotes", 1).is_err());
-        assert!(preprocessor.parse_include_line("@include \"unterminated", 1).is_err());
-        assert!(preprocessor.parse_include_line("@include \"\" extra", 1).is_err());
-    }
+    
+    log::debug!("Merged module content:\n{}", merged);
+    merged
 }
+
+

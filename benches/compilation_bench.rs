@@ -35,7 +35,7 @@ fn bench_complex_compilation(c: &mut Criterion) {
     let output_path = temp_dir.path().join("complex.krb");
     
     // Load the calculator example
-    let content = include_str!("../examples/calculator.kry");
+    let content = include_str!("../kryon-examples/calculator.kry");
     fs::write(&input_path, content).unwrap();
     
     c.bench_function("complex_compilation", |b| {
@@ -76,7 +76,7 @@ fn bench_optimization_levels(c: &mut Criterion) {
     let temp_dir = TempDir::new().unwrap();
     let input_path = temp_dir.path().join("opt.kry");
     
-    let content = include_str!("../examples/calculator.kry");
+    let content = include_str!("../kryon-examples/calculator.kry");
     fs::write(&input_path, content).unwrap();
     
     let mut group = c.benchmark_group("optimization_levels");

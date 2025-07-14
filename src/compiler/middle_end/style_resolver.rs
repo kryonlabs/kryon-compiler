@@ -1,7 +1,8 @@
 //! Advanced style inheritance and resolution system
 
 use crate::error::{CompilerError, Result};
-use crate::types::*;
+use crate::core::*;
+use crate::core::types::*;
 use std::collections::{HashMap, VecDeque};
 
 pub struct StyleResolver {
@@ -201,11 +202,11 @@ impl StyleResolver {
     
     fn convert_single_property(&self, source_prop: &SourceProperty) -> Result<Option<KrbProperty>> {
         let property_id = self.get_property_id(&source_prop.key);
-        let cleaned_value = crate::utils::clean_and_quote_value(&source_prop.value).0;
+        let cleaned_value = clean_and_quote_value(&source_prop.value).0;
         
         let krb_prop = match property_id {
             PropertyId::BackgroundColor | PropertyId::ForegroundColor | PropertyId::BorderColor => {
-                if let Ok(color) = crate::utils::parse_color(&cleaned_value) {
+                if let Ok(color) = parse_color(&cleaned_value) {
                     Some(KrbProperty {
                         property_id: property_id as u8,
                         value_type: ValueType::Color,
@@ -302,7 +303,7 @@ impl StyleResolver {
             PropertyId::Opacity => {
                 if let Ok(opacity) = cleaned_value.parse::<f64>() {
                     if opacity >= 0.0 && opacity <= 1.0 {
-                        let fixed_point = crate::utils::float_to_fixed_point(opacity);
+                        let fixed_point = float_to_fixed_point(opacity);
                         Some(KrbProperty {
                             property_id: property_id as u8,
                             value_type: ValueType::Percentage,
@@ -643,3 +644,49 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+/// Convert a 64-bit float to 8.8 fixed point (16-bit)
+fn float_to_fixed_point(value: f64) -> u16 {
+    (value * 256.0).round() as u16
+}
+
+/// Convert 8.8 fixed point to 64-bit float
+fn fixed_point_to_float(value: u16) -> f64 {
+    value as f64 / 256.0
+}
+
+
+
+/// Apply style properties (width, height, layout) to element headers
+/// This bridges the gap between style definitions and element size calculations
+pub fn apply_style_properties_to_elements(state: &mut CompilerState) -> Result<()> {
+    for element in &mut state.elements {
+        // Element.style_id is u8, not Option<u8>
+        if element.style_id > 0 {
+            // Find the style by ID
+            if let Some(style) = state.styles.iter().find(|s| s.id == element.style_id) {
+                // Apply width, height, and layout properties if found in style
+                for property in &style.properties {
+                    // Convert property_id back to PropertyId using manual matching
+                    match property.property_id {
+                        0x19 => { // PropertyId::Width
+                            if property.value_type == ValueType::Short && property.value.len() >= 2 {
+                                let width = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                element.width = width;
+                            }
+                        },
+                        0x1B => { // PropertyId::Height  
+                            if property.value_type == ValueType::Short && property.value.len() >= 2 {
+                                let height = u16::from_le_bytes([property.value[0], property.value[1]]);
+                                element.height = height;
+                            }
+                        },
+                        _ => {} // Ignore other properties for now
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+

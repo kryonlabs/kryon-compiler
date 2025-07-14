@@ -2,7 +2,8 @@
 
 // use crate::ast::*;
 use crate::error::{CompilerError, Result};
-use crate::types::*;
+use crate::core::*;
+use crate::compiler::backend::size_calculator::SizeCalculator;
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -74,7 +75,7 @@ impl CodeGenerator {
         self.output.clear();
         
         // 1. Calculate all section sizes first. This must be done before writing anything.
-        let size_calculator = crate::size_calculator::SizeCalculator::new();
+        let size_calculator = SizeCalculator::new();
         size_calculator.calculate_sizes(state)?;
 
         // 2. Write the header with the now-correctly-calculated offsets from the temp_state.
@@ -364,7 +365,7 @@ impl CodeGenerator {
             }
             
             // Write code data (if inline)
-            if script.storage_format == ScriptStorageInline {
+            if script.storage_format == SCRIPT_STORAGE_INLINE {
                 self.output.extend_from_slice(&script.code_data);
             }
         }
@@ -464,8 +465,8 @@ impl CodeGenerator {
 }
 
 // Add constants for script storage format
-pub const ScriptStorageInline: u8 = 0;
-pub const ScriptStorageExternal: u8 = 1;
+pub const SCRIPT_STORAGE_INLINE: u8 = 0;
+pub const SCRIPT_STORAGE_EXTERNAL: u8 = 1;
 
 #[cfg(test)]
 mod tests {
