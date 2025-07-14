@@ -120,12 +120,14 @@ impl SemanticAnalyzer {
     }
     
     fn collect_component_definition(&mut self, ast: &AstNode, state: &mut CompilerState) -> Result<()> {
-        if let AstNode::Component { name, properties, template: _, .. } = ast {
+        if let AstNode::Component { name, properties, template, .. } = ast {
             // Check for duplicate component names - but allow includes to redefine components
             // The latest definition wins (include order matters)
             if let Some(existing_index) = state.component_defs.iter().position(|c| c.name == *name) {
                 // Remove the existing component definition - the new one will replace it
                 state.component_defs.remove(existing_index);
+                // Also remove the old template
+                state.component_ast_templates.remove(name);
                 log::debug!("Component '{}' redefined, using latest definition", name);
             }
             
@@ -146,6 +148,9 @@ impl SemanticAnalyzer {
                     default_value: comp_prop.default_value.clone().unwrap_or_default(),
                 });
             }
+            
+            // Store the template AST for the resolver to use
+            state.component_ast_templates.insert(name.clone(), (**template).clone());
             
             state.component_defs.push(component_def);
             state.header_flags |= FLAG_HAS_COMPONENT_DEFS;
@@ -449,8 +454,9 @@ impl SemanticAnalyzer {
     }
     
     fn validate_parent_child_relationship(&mut self, parent_type: &str, child_type: &str) -> Result<()> {
-        // Some basic validation rules
+        // Comprehensive element nesting validation based on UI best practices
         match (parent_type, child_type) {
+            // Leaf elements that cannot contain children
             ("Text", _) => {
                 return Err(CompilerError::semantic_legacy(
                     0,
@@ -469,6 +475,54 @@ impl SemanticAnalyzer {
                     format!("Image elements cannot contain child elements, found '{}'", child_type)
                 ));
             }
+            
+            // Button semantic validation - warn about nested interactive elements
+            ("Button", "Button") => {
+                return Err(CompilerError::semantic_legacy(
+                    0,
+                    "Buttons should not contain other buttons (accessibility issue)".to_string()
+                ));
+            }
+            ("Button", "Input") => {
+                return Err(CompilerError::semantic_legacy(
+                    0,
+                    "Buttons should not contain input elements (accessibility issue)".to_string()
+                ));
+            }
+            
+            // App should only contain top-level layout elements and custom elements
+            ("App", child) => {
+                let child_element_type = ElementType::from_name(child);
+                if !matches!(child, "Container" | "Text" | "Button" | "Input" | "Image") && 
+                   child_element_type != ElementType::Unknown {
+                    return Err(CompilerError::semantic_legacy(
+                        0,
+                        format!("App element should only contain Container, Text, Button, Input, Image, or custom elements, found '{}'", child_type)
+                    ));
+                }
+            }
+            
+            // Valid container relationships
+            ("Container", _) => {}, // Containers can contain any element
+            ("Button", "Text") => {}, // Buttons can contain text
+            ("Button", "Image") => {}, // Buttons can contain images
+            ("Button", "Container") => {}, // Buttons can contain layout containers
+            
+            // Catch unknown element types
+            (parent, child) if !matches!(parent, "App" | "Container" | "Text" | "Button" | "Input" | "Image") => {
+                return Err(CompilerError::semantic_legacy(
+                    0,
+                    format!("Unknown parent element type: '{}'", parent)
+                ));
+            }
+            (parent, child) if !matches!(child, "App" | "Container" | "Text" | "Button" | "Input" | "Image") => {
+                return Err(CompilerError::semantic_legacy(
+                    0,
+                    format!("Unknown child element type: '{}'", child)
+                ));
+            }
+            
+            // Catch-all for any other valid combinations
             _ => {}
         }
         
@@ -624,15 +678,22 @@ impl SemanticAnalyzer {
         matches!(key,
             "text" | "text_color" | "font_size" | "font_weight" | "font_family" |
             "text_alignment" | "line_height" | "text_decoration" | "text_transform" |
+            "list_style_type" | "white_space" |
             "id" | "pos_x" | "pos_y" | "width" | "height" | "style" |
             "background_color" | "border_color" | "border_width" | "border_radius" |
             "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
             // Transform properties
             "transform" |
+            // Event handlers
+            "onClick" | "onHover" | "onFocus" | "onBlur" |
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
-            "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            "order" | "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            // Typography properties
+            "letter_spacing" | "word_spacing" | "text_indent" | "text_overflow" | "font_style" | "font_variant" |
+            // Overflow properties
+            "overflow" | "overflow_x" | "overflow_y" |
             // Box model properties
             "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
             "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
@@ -645,8 +706,7 @@ impl SemanticAnalyzer {
     
     fn is_valid_button_property(&self, key: &str) -> bool {
         self.is_valid_text_property(key) || matches!(key,
-            "disabled" | "onClick" | "onPress" | "onRelease" | "onHover" |
-            "onFocus" | "onBlur" | "cursor" | "checked" |
+            "disabled" | "onPress" | "onRelease" | "cursor" | "checked" |
             // Box model properties
             "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
             "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
@@ -714,12 +774,16 @@ impl SemanticAnalyzer {
     fn get_input_type_from_properties(&self, properties: &[AstProperty]) -> InputType {
         for prop in properties {
             if prop.key == "type" {
-                if let PropertyValue::String(_) = &prop.value {
-                    // Use cleaned_value to remove quotes
-                    let cleaned_type = prop.cleaned_value();
-                    if let Some(input_type) = InputType::from_name(&cleaned_type) {
-                        return input_type;
+                // Handle both String and Expression variants
+                match &prop.value {
+                    PropertyValue::String(_) | PropertyValue::Expression(_) => {
+                        // Use cleaned_value to remove quotes and handle expressions
+                        let cleaned_type = prop.cleaned_value();
+                        if let Some(input_type) = InputType::from_name(&cleaned_type) {
+                            return input_type;
+                        }
                     }
+                    _ => {}
                 }
             }
         }
@@ -758,7 +822,10 @@ impl SemanticAnalyzer {
                 matches!(property,
                     "value" | "placeholder" | "max_length" | "min_length" | "readonly" | 
                     "pattern" | "required" | "onChange" | "onSubmit" |
-                    "font_size" | "font_weight" | "font_family" | "text_color" | "color"
+                    // Text styling properties
+                    "font_size" | "font_weight" | "font_family" | "text_color" | "color" |
+                    "text_alignment" | "line_height" | "letter_spacing" | "text_decoration" |
+                    "text_transform" | "text_indent" | "font_style" | "font_variant" | "word_spacing"
                 ) || (input_type == InputType::Number && matches!(property, "min" | "max" | "step"))
             }
             
@@ -825,11 +892,17 @@ impl SemanticAnalyzer {
         match input_type {
             InputType::Text | InputType::Password | InputType::Email | 
             InputType::Tel | InputType::Url | InputType::Search => {
-                props.extend(&["value", "placeholder", "max_length", "min_length", "readonly", "pattern", "onChange", "onSubmit"]);
+                props.extend(&["value", "placeholder", "max_length", "min_length", "readonly", "pattern", "onChange", "onSubmit",
+                    "font_size", "font_weight", "font_family", "text_color", "text_alignment", 
+                    "line_height", "letter_spacing", "text_decoration", "text_transform", 
+                    "text_indent", "font_style", "font_variant", "word_spacing"]);
             }
             
             InputType::Number => {
-                props.extend(&["value", "placeholder", "min", "max", "step", "readonly", "onChange", "onSubmit"]);
+                props.extend(&["value", "placeholder", "min", "max", "step", "readonly", "onChange", "onSubmit",
+                    "font_size", "font_weight", "font_family", "text_color", "text_alignment", 
+                    "line_height", "letter_spacing", "text_decoration", "text_transform", 
+                    "text_indent", "font_style", "font_variant", "word_spacing"]);
             }
             
             InputType::Checkbox | InputType::Radio => {
@@ -896,13 +969,16 @@ impl SemanticAnalyzer {
             "min_width" | "min_height" | "max_width" | "max_height" |
             "style" | "background_color" | "border_color" | "border_width" |
             "border_radius" | "padding" | "margin" | "opacity" | "visibility" | "visible" | "z_index" |
+            "list_style_type" |
             // Transform properties
             "transform" |
             // Modern Taffy layout properties
             "display" | "flex_direction" | "flex_wrap" | "flex_grow" | "flex_shrink" | "flex_basis" |
             "align_items" | "align_self" | "align_content" | "justify_content" | "justify_items" | "justify_self" |
-            "position" | "top" | "right" | "bottom" | "left" | "inset" |
+            "order" | "position" | "top" | "right" | "bottom" | "left" | "inset" |
             "grid_template_columns" | "grid_template_rows" | "grid_area" | "grid_column" | "grid_row" |
+            // Overflow properties
+            "overflow" | "overflow_x" | "overflow_y" |
             // Box model properties
             "padding_top" | "padding_right" | "padding_bottom" | "padding_left" |
             "margin_top" | "margin_right" | "margin_bottom" | "margin_left" |
@@ -1018,8 +1094,12 @@ pub fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<
                     // Convert style properties to KRB format first
                     let mut krb_properties = Vec::new();
                     for ast_prop in properties {
-                        if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
-                            krb_properties.push(krb_prop);
+                        // Expand shorthand properties
+                        let expanded_props = expand_shorthand_property(ast_prop)?;
+                        for expanded_prop in expanded_props {
+                            if let Some(krb_prop) = convert_ast_property_to_krb(&expanded_prop, state)? {
+                                krb_properties.push(krb_prop);
+                            }
                         }
                     }
                     
@@ -1247,8 +1327,12 @@ fn convert_element_to_state(
 
                 // Default case for all other standard properties
                 _ => {
-                    if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
-                        element.krb_properties.push(krb_prop);
+                    // Expand shorthand properties
+                    let expanded_props = expand_shorthand_property(ast_prop)?;
+                    for expanded_prop in expanded_props {
+                        if let Some(krb_prop) = convert_ast_property_to_krb(&expanded_prop, state)? {
+                            element.krb_properties.push(krb_prop);
+                        }
                     }
                 }
             }
@@ -1259,8 +1343,12 @@ fn convert_element_to_state(
             if let Some(state_flag) = pseudo.state_flag() {
                 let mut state_props = Vec::new();
                 for ast_prop in &pseudo.properties {
-                    if let Some(krb_prop) = convert_ast_property_to_krb(ast_prop, state)? {
-                        state_props.push(krb_prop);
+                    // Expand shorthand properties
+                    let expanded_props = expand_shorthand_property(ast_prop)?;
+                    for expanded_prop in expanded_props {
+                        if let Some(krb_prop) = convert_ast_property_to_krb(&expanded_prop, state)? {
+                            state_props.push(krb_prop);
+                        }
                     }
                 }
                 element.state_property_sets.push(StatePropertySet {
@@ -1296,8 +1384,202 @@ fn convert_element_to_state(
 }
 
 
+fn parse_calc_expression(expr: &str) -> Result<f32> {
+    // Simple calc() parser for basic expressions like:
+    // calc(100% - 20px), calc(50vw + 10px), calc(1.5em * 2)
+    let expr = expr.trim();
+    
+    // Remove calc() wrapper
+    if expr.starts_with("calc(") && expr.ends_with(")") {
+        let inner = &expr[5..expr.len()-1].trim();
+        
+        // For now, support simple binary operations
+        if let Some(pos) = inner.find(" + ") {
+            let left = &inner[..pos].trim();
+            let right = &inner[pos + 3..].trim();
+            return Ok(parse_calc_value(left)? + parse_calc_value(right)?);
+        } else if let Some(pos) = inner.find(" - ") {
+            let left = &inner[..pos].trim();
+            let right = &inner[pos + 3..].trim();
+            return Ok(parse_calc_value(left)? - parse_calc_value(right)?);
+        } else if let Some(pos) = inner.find(" * ") {
+            let left = &inner[..pos].trim();
+            let right = &inner[pos + 3..].trim();
+            return Ok(parse_calc_value(left)? * parse_calc_value(right)?);
+        } else if let Some(pos) = inner.find(" / ") {
+            let left = &inner[..pos].trim();
+            let right = &inner[pos + 3..].trim();
+            let right_val = parse_calc_value(right)?;
+            if right_val != 0.0 {
+                return Ok(parse_calc_value(left)? / right_val);
+            }
+        }
+        
+        // Single value
+        return parse_calc_value(inner);
+    }
+    
+    Err(CompilerError::semantic_legacy(0, format!("Invalid calc() expression: {}", expr)))
+}
+
+fn parse_calc_value(value: &str) -> Result<f32> {
+    let value = value.trim();
+    
+    // Handle different units
+    if value.ends_with("px") {
+        let num_str = &value[..value.len()-2];
+        num_str.parse::<f32>().map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid px value: {}", value)))
+    } else if value.ends_with("%") {
+        let num_str = &value[..value.len()-1];
+        // Convert percentage to decimal (50% -> 0.5)
+        num_str.parse::<f32>().map(|v| v / 100.0).map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid % value: {}", value)))
+    } else if value.ends_with("em") {
+        let num_str = &value[..value.len()-2];
+        // Assume 1em = 16px for calc purposes
+        num_str.parse::<f32>().map(|v| v * 16.0).map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid em value: {}", value)))
+    } else if value.ends_with("rem") {
+        let num_str = &value[..value.len()-3];
+        // Assume 1rem = 16px for calc purposes
+        num_str.parse::<f32>().map(|v| v * 16.0).map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid rem value: {}", value)))
+    } else if value.ends_with("vw") {
+        let num_str = &value[..value.len()-2];
+        // Assume 1vw = 8px for calc purposes (800px viewport)
+        num_str.parse::<f32>().map(|v| v * 8.0).map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid vw value: {}", value)))
+    } else if value.ends_with("vh") {
+        let num_str = &value[..value.len()-2];
+        // Assume 1vh = 6px for calc purposes (600px viewport)
+        num_str.parse::<f32>().map(|v| v * 6.0).map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid vh value: {}", value)))
+    } else {
+        // Pure number
+        value.parse::<f32>().map_err(|_| CompilerError::semantic_legacy(0, format!("Invalid numeric value: {}", value)))
+    }
+}
+
+/// Expand shorthand properties into individual properties
+fn expand_shorthand_property(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
+    // Check if this is a shorthand property
+    match ast_prop.key.as_str() {
+        "margin" => expand_margin_shorthand(ast_prop),
+        "padding" => expand_padding_shorthand(ast_prop),
+        "border" => expand_border_shorthand(ast_prop),
+        _ => Ok(vec![ast_prop.clone()]), // Not a shorthand, return as-is
+    }
+}
+
+/// Expand margin shorthand: margin: 10 0 -> margin_top: 10, margin_right: 0, etc.
+fn expand_margin_shorthand(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
+    if let PropertyValue::Array(ref values) = ast_prop.value {
+        let expanded = expand_box_model_values(values, "margin", ast_prop.line)?;
+        Ok(expanded)
+    } else {
+        // Single value: margin: 10 -> all sides
+        let value = ast_prop.value.clone();
+        Ok(vec![
+            AstProperty::new("margin_top".to_string(), value.clone(), ast_prop.line),
+            AstProperty::new("margin_right".to_string(), value.clone(), ast_prop.line),
+            AstProperty::new("margin_bottom".to_string(), value.clone(), ast_prop.line),
+            AstProperty::new("margin_left".to_string(), value, ast_prop.line),
+        ])
+    }
+}
+
+/// Expand padding shorthand: padding: 10 0 -> padding_top: 10, padding_right: 0, etc.
+fn expand_padding_shorthand(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
+    if let PropertyValue::Array(ref values) = ast_prop.value {
+        let expanded = expand_box_model_values(values, "padding", ast_prop.line)?;
+        Ok(expanded)
+    } else {
+        // Single value: padding: 10 -> all sides
+        let value = ast_prop.value.clone();
+        Ok(vec![
+            AstProperty::new("padding_top".to_string(), value.clone(), ast_prop.line),
+            AstProperty::new("padding_right".to_string(), value.clone(), ast_prop.line),
+            AstProperty::new("padding_bottom".to_string(), value.clone(), ast_prop.line),
+            AstProperty::new("padding_left".to_string(), value, ast_prop.line),
+        ])
+    }
+}
+
+/// Expand border shorthand: border: 1px solid #000 -> border_width: 1px, etc.
+fn expand_border_shorthand(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
+    // For now, just return the original property - border shorthand is more complex
+    // TODO: Implement full border shorthand parsing (width, style, color)
+    Ok(vec![ast_prop.clone()])
+}
+
+/// Expand box model values based on CSS shorthand rules
+/// 1 value: all sides
+/// 2 values: [top/bottom, left/right]  
+/// 3 values: [top, left/right, bottom]
+/// 4 values: [top, right, bottom, left]
+fn expand_box_model_values(values: &[PropertyValue], property_prefix: &str, line: usize) -> Result<Vec<AstProperty>> {
+    match values.len() {
+        1 => {
+            // All sides
+            let value = values[0].clone();
+            Ok(vec![
+                AstProperty::new(format!("{}_top", property_prefix), value.clone(), line),
+                AstProperty::new(format!("{}_right", property_prefix), value.clone(), line),
+                AstProperty::new(format!("{}_bottom", property_prefix), value.clone(), line),
+                AstProperty::new(format!("{}_left", property_prefix), value, line),
+            ])
+        }
+        2 => {
+            // [top/bottom, left/right]
+            let vertical = values[0].clone();
+            let horizontal = values[1].clone();
+            Ok(vec![
+                AstProperty::new(format!("{}_top", property_prefix), vertical.clone(), line),
+                AstProperty::new(format!("{}_right", property_prefix), horizontal.clone(), line),
+                AstProperty::new(format!("{}_bottom", property_prefix), vertical, line),
+                AstProperty::new(format!("{}_left", property_prefix), horizontal, line),
+            ])
+        }
+        3 => {
+            // [top, left/right, bottom]
+            let top = values[0].clone();
+            let horizontal = values[1].clone();
+            let bottom = values[2].clone();
+            Ok(vec![
+                AstProperty::new(format!("{}_top", property_prefix), top, line),
+                AstProperty::new(format!("{}_right", property_prefix), horizontal.clone(), line),
+                AstProperty::new(format!("{}_bottom", property_prefix), bottom, line),
+                AstProperty::new(format!("{}_left", property_prefix), horizontal, line),
+            ])
+        }
+        4 => {
+            // [top, right, bottom, left]
+            Ok(vec![
+                AstProperty::new(format!("{}_top", property_prefix), values[0].clone(), line),
+                AstProperty::new(format!("{}_right", property_prefix), values[1].clone(), line),
+                AstProperty::new(format!("{}_bottom", property_prefix), values[2].clone(), line),
+                AstProperty::new(format!("{}_left", property_prefix), values[3].clone(), line),
+            ])
+        }
+        _ => {
+            Err(CompilerError::semantic_legacy(
+                line,
+                format!("Invalid number of values for {} shorthand: expected 1-4, got {}", property_prefix, values.len())
+            ))
+        }
+    }
+}
+
 fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState) -> Result<Option<KrbProperty>> {
     let cleaned_value = ast_prop.cleaned_value();
+    
+    // Check for calc() expressions first
+    let processed_value = if cleaned_value.starts_with("calc(") {
+        match parse_calc_expression(&cleaned_value) {
+            Ok(result) => format!("{}", result),
+            Err(_) => {
+                // If calc() parsing fails, store as string for runtime evaluation
+                cleaned_value.clone()
+            }
+        }
+    } else {
+        cleaned_value.clone()
+    };
     
     // Use the comprehensive mapping from PropertyId::from_name()
     let property_id = PropertyId::from_name(&ast_prop.key);
@@ -1307,10 +1589,41 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
         return Ok(None); // Will be handled as custom property elsewhere
     }
     
+    // Special handling for text property with array values
+    if property_id == PropertyId::TextContent && matches!(ast_prop.value, PropertyValue::Array(_)) {
+        if let PropertyValue::Array(ref array_values) = ast_prop.value {
+            // Convert array to newline-separated string
+            let mut lines = Vec::new();
+            for value in array_values {
+                match value {
+                    PropertyValue::String(s) => lines.push(s.clone()),
+                    _ => lines.push(value.to_string()),
+                }
+            }
+            let joined_text = lines.join("\n");
+            let string_index = state.add_string(joined_text)?;
+            return Ok(Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::String,
+                size: 1,
+                value: vec![string_index],
+            }));
+        }
+    }
+    
     // Now, correctly serialize the value based on the property ID.
     let krb_prop = match property_id {
         PropertyId::BackgroundColor | PropertyId::ForegroundColor | PropertyId::BorderColor => {
-            if let Ok(color) = parse_color(&cleaned_value) {
+            if cleaned_value.starts_with('$') {
+                // This is a template variable - store it as a string for later resolution
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty { 
+                    property_id: property_id as u8, 
+                    value_type: ValueType::TemplateVariable,
+                    size: 1, 
+                    value: vec![string_index] 
+                })
+            } else if let Ok(color) = parse_color(&cleaned_value) {
                 Some(KrbProperty {
                     property_id: property_id as u8,
                     value_type: ValueType::Color,
@@ -1334,6 +1647,24 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 _ => 1u8, // Default to center
             };
             Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Enum, size: 1, value: vec![alignment_val] })
+        }
+        PropertyId::ListStyleType => {
+            let list_style_val = match cleaned_value.to_lowercase().as_str() {
+                "bullet" => 1u8,
+                "number" => 2u8,
+                "none" => 0u8,
+                _ => 0u8, // Default to none
+            };
+            Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Enum, size: 1, value: vec![list_style_val] })
+        }
+        PropertyId::WhiteSpace => {
+            let white_space_val = match cleaned_value.to_lowercase().as_str() {
+                "normal" => 0u8,
+                "nowrap" => 1u8,
+                "pre" => 2u8,
+                _ => 0u8, // Default to normal
+            };
+            Some(KrbProperty { property_id: property_id as u8, value_type: ValueType::Enum, size: 1, value: vec![white_space_val] })
         }
         PropertyId::FontSize => {
             if let Ok(val) = cleaned_value.parse::<u16>() {
@@ -1375,6 +1706,15 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 } else {
                     return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid percentage value for {}: {}", ast_prop.key, cleaned_value)));
                 }
+            } else if cleaned_value.starts_with('$') {
+                // This is a template variable - store it as a string for later resolution
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty { 
+                    property_id: property_id as u8, 
+                    value_type: ValueType::TemplateVariable, // Special marker for template variables
+                    size: 1, 
+                    value: vec![string_index] 
+                })
             } else {
                 return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid numeric value for {}: {} (must be a number or percentage)", ast_prop.key, cleaned_value)));
             }
@@ -1400,6 +1740,15 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                     value_type: ValueType::Percentage, // Reuse percentage type for float
                     size: 4,
                     value: val.to_le_bytes().to_vec(),
+                })
+            } else if cleaned_value.starts_with('$') {
+                // This is a template variable - store it as a string for later resolution
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::TemplateVariable,
+                    size: 1,
+                    value: vec![string_index],
                 })
             } else {
                 return Err(CompilerError::semantic_legacy(ast_prop.line, format!("Invalid float value for {}: {}", ast_prop.key, cleaned_value)));
@@ -1464,6 +1813,497 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
                 value: vec![if visible { 1 } else { 0 }],
             })
         }
+        
+        // CSS Grid Properties
+        PropertyId::GridTemplateColumns | PropertyId::GridTemplateRows => {
+            // Store grid template as string (e.g., "1fr 200px 1fr", "repeat(3, 1fr)")
+            let string_index = state.add_string(cleaned_value.clone())?;
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::String,
+                size: 1,
+                value: vec![string_index],
+            })
+        }
+        PropertyId::GridTemplateAreas => {
+            // Store grid template areas as string (e.g., "header header" "sidebar content")
+            let string_index = state.add_string(cleaned_value.clone())?;
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::String,
+                size: 1,
+                value: vec![string_index],
+            })
+        }
+        PropertyId::GridArea => {
+            // Store grid area as string (e.g., "header", "1 / 2 / 3 / 4")
+            let string_index = state.add_string(cleaned_value.clone())?;
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::String,
+                size: 1,
+                value: vec![string_index],
+            })
+        }
+        PropertyId::GridAutoFlow => {
+            let flow_val = match cleaned_value.to_lowercase().as_str() {
+                "row" => 0u8,
+                "column" => 1u8,
+                "row dense" | "dense row" => 2u8,
+                "column dense" | "dense column" => 3u8,
+                _ => 0u8, // Default to row
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![flow_val],
+            })
+        }
+        PropertyId::GridColumn | PropertyId::GridRow => {
+            // Store grid line specification as string (e.g., "1 / 3", "span 2")
+            let string_index = state.add_string(cleaned_value.clone())?;
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::String,
+                size: 1,
+                value: vec![string_index],
+            })
+        }
+        PropertyId::GridColumnStart | PropertyId::GridColumnEnd | PropertyId::GridRowStart | PropertyId::GridRowEnd => {
+            // Parse grid line as integer or store as string for named lines
+            if let Ok(line_num) = cleaned_value.parse::<u16>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Short,
+                    size: 2,
+                    value: line_num.to_le_bytes().to_vec(),
+                })
+            } else {
+                // Named grid line
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::String,
+                    size: 1,
+                    value: vec![string_index],
+                })
+            }
+        }
+        
+        // Individual Box Model Properties
+        PropertyId::PaddingTop | PropertyId::PaddingRight | PropertyId::PaddingBottom | PropertyId::PaddingLeft |
+        PropertyId::MarginTop | PropertyId::MarginRight | PropertyId::MarginBottom | PropertyId::MarginLeft => {
+            if let Ok(val) = cleaned_value.parse::<u8>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![val],
+                })
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid numeric value for {}: {}", ast_prop.key, cleaned_value)
+                ));
+            }
+        }
+        PropertyId::BorderTopWidth | PropertyId::BorderRightWidth | PropertyId::BorderBottomWidth | PropertyId::BorderLeftWidth => {
+            if let Ok(val) = cleaned_value.parse::<u8>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![val],
+                })
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid border width value for {}: {}", ast_prop.key, cleaned_value)
+                ));
+            }
+        }
+        PropertyId::BorderTopColor | PropertyId::BorderRightColor | PropertyId::BorderBottomColor | PropertyId::BorderLeftColor => {
+            if cleaned_value.starts_with('$') {
+                // This is a template variable - store it as a string for later resolution
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty { 
+                    property_id: property_id as u8, 
+                    value_type: ValueType::TemplateVariable,
+                    size: 1, 
+                    value: vec![string_index] 
+                })
+            } else if let Ok(color) = parse_color(&cleaned_value) {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Color,
+                    size: 4,
+                    value: color.to_bytes().to_vec(),
+                })
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid color value for {}: {}", ast_prop.key, cleaned_value)
+                ));
+            }
+        }
+        PropertyId::BorderTopLeftRadius | PropertyId::BorderTopRightRadius | 
+        PropertyId::BorderBottomRightRadius | PropertyId::BorderBottomLeftRadius => {
+            if let Ok(val) = cleaned_value.parse::<u8>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![val],
+                })
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid border radius value for {}: {}", ast_prop.key, cleaned_value)
+                ));
+            }
+        }
+        PropertyId::BoxSizing => {
+            let box_sizing_val = match cleaned_value.to_lowercase().as_str() {
+                "content-box" => 0u8,
+                "border-box" => 1u8,
+                _ => 0u8, // Default to content-box
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![box_sizing_val],
+            })
+        }
+        
+        // Position Properties (PropertyId::Position is handled above with other Taffy properties)
+        PropertyId::Right | PropertyId::Bottom => {
+            // Parse as numeric value or percentage (similar to Left/Top)
+            if let Ok(val) = cleaned_value.parse::<u16>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Short,
+                    size: 2,
+                    value: val.to_le_bytes().to_vec(),
+                })
+            } else if cleaned_value.ends_with('%') {
+                let percent_str = &cleaned_value[..cleaned_value.len() - 1];
+                if let Ok(percent_val) = percent_str.parse::<f32>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Percentage,
+                        size: 4,
+                        value: percent_val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        ast_prop.line,
+                        format!("Invalid percentage value for {}: {}", ast_prop.key, cleaned_value)
+                    ));
+                }
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid numeric value for {}: {} (must be a number or percentage)", ast_prop.key, cleaned_value)
+                ));
+            }
+        }
+        
+        // Advanced Flexbox Properties
+        PropertyId::FlexWrap => {
+            let flex_wrap_val = match cleaned_value.to_lowercase().as_str() {
+                "nowrap" => 0u8,
+                "wrap" => 1u8,
+                "wrap-reverse" => 2u8,
+                _ => 0u8, // Default to nowrap
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![flex_wrap_val],
+            })
+        }
+        PropertyId::Order => {
+            if let Ok(order_val) = cleaned_value.parse::<i16>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Short,
+                    size: 2,
+                    value: order_val.to_le_bytes().to_vec(),
+                })
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid order value: {} (must be an integer)", cleaned_value)
+                ));
+            }
+        }
+        
+        // Typography Properties
+        PropertyId::LineHeight => {
+            // Support both numeric (1.5) and length values (24px)
+            if let Ok(line_height) = cleaned_value.parse::<f32>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Float,
+                    size: 4,
+                    value: line_height.to_le_bytes().to_vec(),
+                })
+            } else if cleaned_value.ends_with("px") {
+                let px_str = &cleaned_value[..cleaned_value.len() - 2];
+                if let Ok(px_val) = px_str.parse::<u16>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: px_val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        ast_prop.line,
+                        format!("Invalid line-height value: {}", cleaned_value)
+                    ));
+                }
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid line-height value: {} (use number or px unit)", cleaned_value)
+                ));
+            }
+        }
+        PropertyId::LetterSpacing | PropertyId::WordSpacing => {
+            // Support px, em, rem values
+            if cleaned_value.ends_with("px") {
+                let px_str = &cleaned_value[..cleaned_value.len() - 2];
+                if let Ok(px_val) = px_str.parse::<i16>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: px_val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        ast_prop.line,
+                        format!("Invalid spacing value: {}", cleaned_value)
+                    ));
+                }
+            } else if cleaned_value.ends_with("em") || cleaned_value.ends_with("rem") {
+                let unit_str = &cleaned_value[..cleaned_value.len() - if cleaned_value.ends_with("rem") { 3 } else { 2 }];
+                if let Ok(em_val) = unit_str.parse::<f32>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Float,
+                        size: 4,
+                        value: em_val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        ast_prop.line,
+                        format!("Invalid spacing value: {}", cleaned_value)
+                    ));
+                }
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid spacing value: {} (use px, em, or rem units)", cleaned_value)
+                ));
+            }
+        }
+        PropertyId::TextDecoration => {
+            let decoration_val = match cleaned_value.to_lowercase().as_str() {
+                "none" => 0u8,
+                "underline" => 1u8,
+                "overline" => 2u8,
+                "line-through" => 3u8,
+                "underline overline" | "overline underline" => 4u8,
+                _ => 0u8, // Default to none
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![decoration_val],
+            })
+        }
+        PropertyId::TextTransform => {
+            let transform_val = match cleaned_value.to_lowercase().as_str() {
+                "none" => 0u8,
+                "uppercase" => 1u8,
+                "lowercase" => 2u8,
+                "capitalize" => 3u8,
+                _ => 0u8, // Default to none
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![transform_val],
+            })
+        }
+        PropertyId::TextIndent => {
+            if let Ok(indent_val) = cleaned_value.parse::<u16>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Short,
+                    size: 2,
+                    value: indent_val.to_le_bytes().to_vec(),
+                })
+            } else if cleaned_value.ends_with('%') {
+                let percent_str = &cleaned_value[..cleaned_value.len() - 1];
+                if let Ok(percent_val) = percent_str.parse::<f32>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Percentage,
+                        size: 4,
+                        value: percent_val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        ast_prop.line,
+                        format!("Invalid text-indent percentage: {}", cleaned_value)
+                    ));
+                }
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid text-indent value: {} (use number or percentage)", cleaned_value)
+                ));
+            }
+        }
+        PropertyId::TextOverflow => {
+            let overflow_val = match cleaned_value.to_lowercase().as_str() {
+                "clip" => 0u8,
+                "ellipsis" => 1u8,
+                _ => 0u8, // Default to clip
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![overflow_val],
+            })
+        }
+        PropertyId::FontStyle => {
+            let style_val = match cleaned_value.to_lowercase().as_str() {
+                "normal" => 0u8,
+                "italic" => 1u8,
+                "oblique" => 2u8,
+                _ => 0u8, // Default to normal
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![style_val],
+            })
+        }
+        PropertyId::FontVariant => {
+            let variant_val = match cleaned_value.to_lowercase().as_str() {
+                "normal" => 0u8,
+                "small-caps" => 1u8,
+                _ => 0u8, // Default to normal
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![variant_val],
+            })
+        }
+        
+        // Overflow Properties (already implemented in property registry)
+        PropertyId::Overflow | PropertyId::OverflowX | PropertyId::OverflowY => {
+            let overflow_val = match cleaned_value.to_lowercase().as_str() {
+                "visible" => 0u8,
+                "hidden" => 1u8,
+                "scroll" => 2u8,
+                "auto" => 3u8,
+                _ => 0u8, // Default to visible
+            };
+            Some(KrbProperty {
+                property_id: property_id as u8,
+                value_type: ValueType::Enum,
+                size: 1,
+                value: vec![overflow_val],
+            })
+        }
+        
+        // Visual Effects Properties
+        PropertyId::BoxShadow | PropertyId::TextShadow => {
+            // Store shadow definition as string (e.g., "2px 2px 4px rgba(0,0,0,0.5)" or "none")
+            if cleaned_value.to_lowercase() == "none" {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Enum,
+                    size: 1,
+                    value: vec![0u8], // 0 = none
+                })
+            } else {
+                // Store complex shadow as string for parsing by renderer
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::String,
+                    size: 1,
+                    value: vec![string_index],
+                })
+            }
+        }
+        PropertyId::Filter | PropertyId::BackdropFilter => {
+            // Store filter functions as string (e.g., "blur(5px)", "brightness(150%)")
+            if cleaned_value.to_lowercase() == "none" {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Enum,
+                    size: 1,
+                    value: vec![0u8], // 0 = none
+                })
+            } else {
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::String,
+                    size: 1,
+                    value: vec![string_index],
+                })
+            }
+        }
+        
+        // Responsive Properties (for media query support)
+        PropertyId::MinViewportWidth | PropertyId::MaxViewportWidth => {
+            if let Ok(width_val) = cleaned_value.parse::<u16>() {
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Short,
+                    size: 2,
+                    value: width_val.to_le_bytes().to_vec(),
+                })
+            } else if cleaned_value.ends_with("px") {
+                let px_str = &cleaned_value[..cleaned_value.len() - 2];
+                if let Ok(px_val) = px_str.parse::<u16>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: px_val.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        ast_prop.line,
+                        format!("Invalid viewport width value: {}", cleaned_value)
+                    ));
+                }
+            } else {
+                return Err(CompilerError::semantic_legacy(
+                    ast_prop.line,
+                    format!("Invalid viewport width value: {} (use number or px unit)", cleaned_value)
+                ));
+            }
+        }
+        
         _ => None, // Should not be reached due to the initial match, but it's safe.
     };
     

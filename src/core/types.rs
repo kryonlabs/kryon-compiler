@@ -208,6 +208,9 @@ pub enum ValueType {
     CSSUnit = 0x19,          // CSS unit values (px, em, rem, vw, vh, deg, rad, turn)
     Transform2D = 0x1A,      // Optimized 2D transform (scale, translate, rotate)
     Transform3D = 0x1B,      // Full 3D transform data
+    
+    // Template variable marker (to be resolved during compilation)
+    TemplateVariable = 0x1C, // Holds variable name to be substituted
 }
 
 // Script language IDs

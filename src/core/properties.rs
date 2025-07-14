@@ -19,6 +19,8 @@ pub enum PropertyId {
     TextAlignment = 0x0B,
     FontFamily = 0x0C,
     ImageSource = 0x0D,
+    ListStyleType = 0x1E,
+    WhiteSpace = 0x1F,
     Opacity = 0x0E,
     ZIndex = 0x0F,
     Visibility = 0x10,
@@ -97,6 +99,27 @@ pub enum PropertyId {
     OverflowX = 0x8C,
     OverflowY = 0x8D,
     
+    // Typography properties
+    LineHeight = 0x8E,
+    LetterSpacing = 0x8F,
+    TextDecoration = 0x93,
+    TextTransform = 0x94,
+    TextIndent = 0x95,
+    TextOverflow = 0x96,
+    FontStyle = 0x97,
+    FontVariant = 0x98,
+    WordSpacing = 0x99,
+    
+    // Visual Effects Properties
+    BoxShadow = 0x9A,
+    TextShadow = 0x9B,
+    Filter = 0x9C,
+    BackdropFilter = 0x9D,
+    
+    // Responsive Properties
+    MinViewportWidth = 0x9E,
+    MaxViewportWidth = 0x9F,
+    
     // Taffy Modern Flexbox Properties (0x40-0x4F)
     Display = 0x40,
     FlexDirection = 0x41,
@@ -145,6 +168,8 @@ impl PropertyId {
             "text_alignment" => PropertyId::TextAlignment,         // 0x0B
             "font_family" => PropertyId::FontFamily,               // 0x0C
             "src" | "image_source" => PropertyId::ImageSource,     // 0x0D
+            "list_style_type" | "list-style-type" => PropertyId::ListStyleType, // 0x1E
+            "white_space" | "white-space" => PropertyId::WhiteSpace, // 0x1F
             "opacity" => PropertyId::Opacity,                      // 0x0E
             "z_index" => PropertyId::ZIndex,                       // 0x0F
             "visibility" | "visible" => PropertyId::Visibility,    // 0x10
@@ -160,6 +185,27 @@ impl PropertyId {
             "overflow" => PropertyId::Overflow,                    // 0x8B
             "overflow-x" => PropertyId::OverflowX,                 // 0x8C
             "overflow-y" => PropertyId::OverflowY,                 // 0x8D
+            
+            // Typography properties
+            "line_height" | "line-height" => PropertyId::LineHeight,           // 0x8E
+            "letter_spacing" | "letter-spacing" => PropertyId::LetterSpacing,  // 0x8F
+            "text_decoration" | "text-decoration" => PropertyId::TextDecoration, // 0x93
+            "text_transform" | "text-transform" => PropertyId::TextTransform,   // 0x94
+            "text_indent" | "text-indent" => PropertyId::TextIndent,            // 0x95
+            "text_overflow" | "text-overflow" => PropertyId::TextOverflow,      // 0x96
+            "font_style" | "font-style" => PropertyId::FontStyle,               // 0x97
+            "font_variant" | "font-variant" => PropertyId::FontVariant,         // 0x98
+            "word_spacing" | "word-spacing" => PropertyId::WordSpacing,         // 0x99
+            
+            // Visual Effects properties
+            "box_shadow" | "box-shadow" => PropertyId::BoxShadow,               // 0x9A
+            "text_shadow" | "text-shadow" => PropertyId::TextShadow,            // 0x9B
+            "filter" => PropertyId::Filter,                                     // 0x9C
+            "backdrop_filter" | "backdrop-filter" => PropertyId::BackdropFilter, // 0x9D
+            
+            // Responsive properties
+            "min_viewport_width" | "min-viewport-width" => PropertyId::MinViewportWidth, // 0x9E
+            "max_viewport_width" | "max-viewport-width" => PropertyId::MaxViewportWidth, // 0x9F
             "width" => PropertyId::Width,                          // 0x19
             "height" => PropertyId::Height,                        // 0x1A
             "cursor" => PropertyId::Cursor,                        // 0x29

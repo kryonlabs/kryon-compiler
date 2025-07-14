@@ -681,6 +681,39 @@ impl Parser {
                     children.push(self.parse_for()?);
                 } else if matches!(self.peek().token_type, TokenType::If) {
                     children.push(self.parse_if()?);
+                } else if matches!(self.peek().token_type, TokenType::String(_)) {
+                    // Handle shorthand syntax for Text elements: Text { "Hello" } → Text { text: "Hello" }
+                    if element_type == "Text" {
+                        let string_value = match &self.advance().token_type {
+                            TokenType::String(s) => s.clone(),
+                            _ => unreachable!(),
+                        };
+                        properties.push(AstProperty::new(
+                            "text".to_string(),
+                            PropertyValue::String(string_value),
+                            self.previous().line,
+                        ));
+                    } else {
+                        return Err(CompilerError::parse_legacy(
+                            self.peek().line,
+                            format!("String literal shorthand only supported for Text elements, not {}", element_type)
+                        ));
+                    }
+                } else if matches!(self.peek().token_type, TokenType::LeftBracket) {
+                    // Handle array shorthand syntax for Text elements: Text { ["Line 1", "Line 2"] } → Text { text: "Line 1\nLine 2" }
+                    if element_type == "Text" {
+                        let array_value = self.parse_array_literal()?;
+                        properties.push(AstProperty::new(
+                            "text".to_string(),
+                            array_value,
+                            self.previous().line,
+                        ));
+                    } else {
+                        return Err(CompilerError::parse_legacy(
+                            self.peek().line,
+                            format!("Array literal shorthand only supported for Text elements, not {}", element_type)
+                        ));
+                    }
                 } else {
                     return Err(CompilerError::parse_legacy(
                         self.peek().line,
@@ -750,7 +783,11 @@ impl Parser {
     
         self.consume(TokenType::Colon, "Expected ':' after property name")?;
         
-        let value = self.parse_value()?;
+        let value = if self.is_shorthand_property(&key) {
+            self.parse_shorthand_value(&key)?
+        } else {
+            self.parse_value()?
+        };
         
         // Optional semicolon
         self.match_token(&TokenType::Semicolon);
@@ -1163,6 +1200,100 @@ impl Parser {
         Ok(name_parts.join(""))
     }
     
+    /// Check if a property name is a CSS shorthand property
+    fn is_shorthand_property(&self, key: &str) -> bool {
+        matches!(key, "margin" | "padding" | "border")
+    }
+    
+    /// Parse shorthand property values like "10 0" or "5 10 15 20"
+    fn parse_shorthand_value(&mut self, key: &str) -> Result<PropertyValue> {
+        let mut values = Vec::new();
+        
+        // Parse the first value
+        let first_value = self.parse_single_value()?;
+        values.push(first_value);
+        
+        // Parse additional space-separated values
+        while !self.check(&TokenType::Newline) && 
+              !self.check(&TokenType::Semicolon) && 
+              !self.check(&TokenType::RightBrace) &&
+              !self.is_at_end() &&
+              self.is_value_token() {
+            
+            let value = self.parse_single_value()?;
+            values.push(value);
+        }
+        
+        // Convert to shorthand array
+        Ok(PropertyValue::Array(values))
+    }
+    
+    /// Parse a single value (number, string, etc.) for shorthand parsing
+    fn parse_single_value(&mut self) -> Result<PropertyValue> {
+        match &self.peek().token_type {
+            TokenType::Number(n) => {
+                let value = *n;
+                self.advance();
+                Ok(PropertyValue::Number(value))
+            }
+            TokenType::Integer(i) => {
+                let value = *i;
+                self.advance();
+                Ok(PropertyValue::Integer(value))
+            }
+            TokenType::Pixels(p) => {
+                let value = *p;
+                self.advance();
+                Ok(PropertyValue::Pixels(value))
+            }
+            TokenType::Em(e) => {
+                let value = *e;
+                self.advance();
+                Ok(PropertyValue::Em(value))
+            }
+            TokenType::Rem(r) => {
+                let value = *r;
+                self.advance();
+                Ok(PropertyValue::Rem(value))
+            }
+            TokenType::Percentage(p) => {
+                let value = *p;
+                self.advance();
+                Ok(PropertyValue::Percentage(value))
+            }
+            TokenType::String(s) => {
+                let value = format!("\"{}\"", s);
+                self.advance();
+                Ok(PropertyValue::String(value))
+            }
+            TokenType::Identifier(id) => {
+                let value = id.clone();
+                self.advance();
+                Ok(PropertyValue::String(value))
+            }
+            TokenType::Color(c) => {
+                let value = c.clone();
+                self.advance();
+                Ok(PropertyValue::Color(value))
+            }
+            _ => {
+                Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    format!("Expected a value, but found {}", self.peek().token_type)
+                ))
+            }
+        }
+    }
+    
+    /// Check if the current token can be part of a value
+    fn is_value_token(&self) -> bool {
+        matches!(self.peek().token_type,
+            TokenType::Number(_) | TokenType::Integer(_) | TokenType::Pixels(_) |
+            TokenType::Em(_) | TokenType::Rem(_) | TokenType::Percentage(_) |
+            TokenType::String(_) | TokenType::Identifier(_) | TokenType::Color(_)
+        )
+    }
+
     /// Extract template variables from a string value
     /// Finds patterns like $variable_name and returns a list of variable names
     fn extract_template_variables(&self, value: &str) -> Vec<String> {

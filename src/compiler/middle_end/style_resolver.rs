@@ -300,6 +300,42 @@ impl StyleResolver {
                     value: vec![alignment_value],
                 })
             }
+            PropertyId::ListStyleType => {
+                let list_style_value = match cleaned_value.as_str() {
+                    "bullet" => 1u8,
+                    "number" => 2u8,
+                    "none" => 0u8,
+                    _ => return Err(CompilerError::semantic_legacy(
+                        source_prop.line_num,
+                        format!("Invalid list style type: '{}'. Use 'bullet', 'number', or 'none'", cleaned_value)
+                    )),
+                };
+                
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Enum,
+                    size: 1,
+                    value: vec![list_style_value],
+                })
+            }
+            PropertyId::WhiteSpace => {
+                let white_space_value = match cleaned_value.as_str() {
+                    "normal" => 0u8,
+                    "nowrap" => 1u8,
+                    "pre" => 2u8,
+                    _ => return Err(CompilerError::semantic_legacy(
+                        source_prop.line_num,
+                        format!("Invalid white-space value: '{}'. Use 'normal', 'nowrap', or 'pre'", cleaned_value)
+                    )),
+                };
+                
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Enum,
+                    size: 1,
+                    value: vec![white_space_value],
+                })
+            }
             PropertyId::Opacity => {
                 if let Ok(opacity) = cleaned_value.parse::<f64>() {
                     if opacity >= 0.0 && opacity <= 1.0 {

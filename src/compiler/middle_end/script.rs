@@ -4,6 +4,7 @@ use crate::compiler::frontend::ast::{AstNode, ScriptSource};
 use crate::error::{CompilerError, Result};
 use crate::core::*;
 use crate::core::types::*;
+use crate::core::properties::PropertyId;
 use crate::CompilerOptions;
 
 use crate::compiler::backend::codegen::{SCRIPT_STORAGE_INLINE, SCRIPT_STORAGE_EXTERNAL};
@@ -652,6 +653,22 @@ pub fn process_template_variables(state: &mut CompilerState, options: &CompilerO
     // Collect element properties data to avoid borrowing conflicts
     let mut properties_to_process = Vec::new();
     for (element_index, element) in state.elements.iter().enumerate() {
+        // First check krb_properties for TemplateVariable types
+        for krb_prop in &element.krb_properties {
+            if krb_prop.value_type == ValueType::TemplateVariable && !krb_prop.value.is_empty() {
+                // Get the variable name from the string table
+                let string_index = krb_prop.value[0];
+                if let Some(string_entry) = state.strings.get(string_index as usize) {
+                    let var_name = &string_entry.text;
+                    if var_name.starts_with('$') {
+                        let template_variables = vec![var_name[1..].to_string()]; // Remove $
+                        properties_to_process.push((element_index, krb_prop.property_id, var_name.clone(), template_variables));
+                    }
+                }
+            }
+        }
+        
+        // Also check source_properties for backward compatibility
         for source_prop in &element.source_properties {
             // Check if this property has template variables
             let template_variables = extract_template_variables(&source_prop.value);
@@ -662,22 +679,23 @@ pub fn process_template_variables(state: &mut CompilerState, options: &CompilerO
             }
             
             if !template_variables.is_empty() {
-                properties_to_process.push((element_index, source_prop.key.clone(), source_prop.value.clone(), template_variables));
+                let property_id = PropertyId::from_name(&source_prop.key) as u8;
+                properties_to_process.push((element_index, property_id, source_prop.value.clone(), template_variables));
             }
         }
     }
     
+    // Clone the properties for the second loop
+    let properties_to_substitute = properties_to_process.clone();
+    
     // Now process the collected properties
-    for (element_index, prop_key, prop_value, template_variables) in properties_to_process {
+    for (element_index, property_id, prop_value, template_variables) in properties_to_process {
         // Get the expression string index
         let expression_index = if let Some(idx) = state.strings.iter().position(|s| s.text == prop_value) {
             idx as u8
         } else {
             state.add_string(prop_value.clone())?
         };
-                
-        // Map property key to property ID
-        let property_id = PropertyId::from_name(&prop_key) as u8;
         
         // Get variable indices
         let mut variable_indices = Vec::new();
@@ -697,6 +715,72 @@ pub fn process_template_variables(state: &mut CompilerState, options: &CompilerO
         };
         
         state.template_bindings.push(template_binding);
+    }
+    
+    // Prepare resolved values
+    let mut resolved_substitutions = Vec::new();
+    
+    for (element_index, property_id, prop_value, template_variables) in properties_to_substitute {
+        // Substitute the variable value
+        let mut resolved_value = prop_value.clone();
+        
+        // Replace all template variables
+        for var_name in &template_variables {
+            if let Some(var_def) = state.variables.get(var_name) {
+                let var_placeholder = format!("${}", var_name);
+                resolved_value = resolved_value.replace(&var_placeholder, &var_def.value);
+            }
+        }
+        
+        // Determine the appropriate value type and bytes
+        let (new_value_type, new_size, new_value) = if let Ok(val) = resolved_value.parse::<u16>() {
+            // It's a numeric value
+            (ValueType::Short, 2, val.to_le_bytes().to_vec())
+        } else if resolved_value.ends_with('%') {
+            // It's a percentage
+            let percent_str = &resolved_value[..resolved_value.len() - 1];
+            if let Ok(percent) = percent_str.parse::<f32>() {
+                (ValueType::Percentage, 4, percent.to_le_bytes().to_vec())
+            } else {
+                // Fallback to string if percentage parsing fails
+                let string_index = state.add_string(resolved_value.clone())?;
+                (ValueType::String, 1, vec![string_index])
+            }
+        } else if let Ok(val) = resolved_value.parse::<f32>() {
+            // It's a float value
+            (ValueType::Float, 4, val.to_le_bytes().to_vec())
+        } else if resolved_value.starts_with('#') || resolved_value.contains("rgb") {
+            // It's a color value - parse it
+            use crate::core::util::parse_color;
+            if let Ok(color) = parse_color(&resolved_value) {
+                (ValueType::Color, 4, color.to_bytes().to_vec())
+            } else {
+                // Fallback to string if color parsing fails
+                let string_index = state.add_string(resolved_value.clone())?;
+                (ValueType::String, 1, vec![string_index])
+            }
+        } else {
+            // Keep it as a string
+            let string_index = state.add_string(resolved_value)?;
+            (ValueType::String, 1, vec![string_index])
+        };
+        
+        resolved_substitutions.push((element_index, property_id, new_value_type, new_size, new_value));
+    }
+    
+    // Now apply the resolved values
+    for (element_index, property_id, new_value_type, new_size, new_value) in resolved_substitutions {
+        if let Some(element) = state.elements.get_mut(element_index) {
+            // Find the property with TemplateVariable type
+            for krb_prop in &mut element.krb_properties {
+                if krb_prop.property_id == property_id && krb_prop.value_type == ValueType::TemplateVariable {
+                    krb_prop.value_type = new_value_type;
+                    krb_prop.size = new_size;
+                    krb_prop.value = new_value;
+                    break;
+                }
+            }
+        }
     }
     
     // Set the template variable flag if we have any template variables

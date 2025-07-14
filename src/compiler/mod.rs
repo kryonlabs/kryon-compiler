@@ -70,8 +70,12 @@ pub fn compile_with_options(
     let mut style_resolver = middle_end::style_resolver::StyleResolver::new();
     style_resolver.resolve_all_styles(&mut state)?;
 
-    let mut component_resolver = middle_end::component_resolver::ComponentResolver::new();
-    component_resolver.resolve_components(&mut ast, &mut state)?;
+    // Component resolution - templates are now available from semantic analysis
+    let component_count = state.component_defs.len();
+    if component_count > 0 {
+        let mut component_resolver = middle_end::component_resolver::ComponentResolver::new();
+        component_resolver.resolve_components(&mut ast, &mut state)?;
+    }
 
     // STAGE 6: STATE CONVERSION
     // Convert the final, resolved AST into the internal `CompilerState` representation.
@@ -289,57 +293,7 @@ fn compile_ast_with_state(
     let component_count = state.component_defs.len();
     
     if component_count > 0 {
-        // Extract component definitions and templates from AST
-        if let AstNode::File { components, .. } = &ast {
-            for component_node in components {
-                if let AstNode::Component { name, properties, template, .. } = component_node {
-                    // Store the template AST for the resolver to use
-                    state.component_ast_templates.insert(name.clone(), (**template).clone());
-                    
-                    // Create component definition
-                    let mut component_def = ComponentDefinition {
-                        name: name.clone(),
-                        properties: Vec::new(),
-                        definition_start_line: 1,
-                        definition_root_element_index: None, // Not needed anymore
-                        calculated_size: 0,
-                        internal_template_element_offsets: std::collections::HashMap::new(),
-                    };
-                    
-                    // Process component properties
-                    for comp_prop in properties {
-                        let ComponentProperty { name: prop_name, property_type, default_value, .. } = comp_prop;
-                        let value_type = match property_type.as_str() {
-                            "String" => ValueType::String,
-                            "Bool" | "Boolean" => ValueType::Bool,
-                            "Int" | "Integer" => ValueType::Int,
-                            "Float" | "Number" => ValueType::Float,
-                            "Color" => ValueType::Color,
-                            "StyleID" | "Style" => ValueType::StyleId,
-                            _ => {
-                                // Check if it's an Enum type
-                                if property_type.starts_with("Enum(") && property_type.ends_with(")") {
-                                    ValueType::Enum
-                                } else {
-                                    ValueType::String // Default fallback
-                                }
-                            }
-                        };
-                        
-                        let prop_def = ComponentPropertyDef {
-                            name: prop_name.clone(),
-                            value_type_hint: value_type,
-                            default_value: default_value.clone().unwrap_or_default(),
-                        };
-                        component_def.properties.push(prop_def);
-                    }
-                    
-                    state.component_defs.push(component_def);
-                }
-            }
-        }
-        
-        // Now resolve components in the AST
+        // Templates are now stored during semantic analysis, so we can directly resolve components
         let mut component_resolver = ComponentResolver::new();
         component_resolver.resolve_components(&mut ast, state)?;
         
