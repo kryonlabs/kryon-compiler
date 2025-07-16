@@ -181,6 +181,16 @@ impl VariableContext {
     
     /// Substitute all $variable and ${variable} references in a string
     pub fn substitute_variables(&self, input: &str) -> Result<String> {
+        self.substitute_variables_with_context(input, false)
+    }
+    
+    /// Substitute variables with script context awareness
+    pub fn substitute_variables_for_script(&self, input: &str) -> Result<String> {
+        self.substitute_variables_with_context(input, true)
+    }
+    
+    /// Context-aware variable substitution
+    fn substitute_variables_with_context(&self, input: &str, is_script_context: bool) -> Result<String> {
         let mut result = input.to_string();
         
         // Support both $variable and ${variable} syntax
@@ -201,7 +211,23 @@ impl VariableContext {
                 };
                 
                 if let Some(var_entry) = self.get_variable(var_name) {
-                    result = result.replace(var_match.as_str(), &var_entry.value);
+                    let replacement = if is_script_context && self.is_template_variable_in_assignment_context(input, var_match.start()) {
+                        // In script context, for template variable assignments, generate proper function calls
+                        if self.is_template_variable_assignment(input, var_match.start()) {
+                            // For assignment, we need to handle the entire assignment statement differently
+                            // Return a placeholder for now - we'll handle the full assignment replacement later
+                            format!("__TEMPLATE_WRITE__{}__", var_name)
+                        } else {
+                            // This is a template variable read (right side of assignment, in expressions, etc.)
+                            // No $ prefix in scripts - direct variable access
+                            format!("{}", var_name)
+                        }
+                    } else {
+                        // Regular substitution - replace with literal value
+                        var_entry.value.clone()
+                    };
+                    
+                    result = result.replace(var_match.as_str(), &replacement);
                 } else {
                     println!("DEBUG: Variable substitution failed for '{}' in context:", var_name);
                     println!("  Input string: {}", input);
@@ -218,7 +244,87 @@ impl VariableContext {
             }
         }
         
+        // Second pass: handle template assignment placeholders
+        if is_script_context {
+            result = self.process_template_assignments(result)?;
+        }
+        
         Ok(result)
+    }
+    
+    /// Process template assignment placeholders and convert them to direct variable access
+    fn process_template_assignments(&self, input: String) -> Result<String> {
+        let mut result = input;
+        
+        // Look for assignment patterns with our write placeholders
+        let assignment_regex = Regex::new(r"__TEMPLATE_WRITE__([a-zA-Z_][a-zA-Z0-9_]*)__\s*=\s*([^\n\r]+)")
+            .map_err(|e| CompilerError::variable_legacy(0, format!("Regex error: {}", e)))?;
+        
+        result = assignment_regex.replace_all(&result, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            let value_expr = caps[2].trim();
+            // Direct assignment to template variable (no $ prefix in scripts)
+            format!("{} = {}", var_name, value_expr)
+        }).to_string();
+        
+        // Replace any remaining read placeholders with direct variable access
+        let read_placeholder_regex = Regex::new(r"__TEMPLATE_WRITE__([a-zA-Z_][a-zA-Z0-9_]*)__")
+            .map_err(|e| CompilerError::variable_legacy(0, format!("Regex error: {}", e)))?;
+        
+        result = read_placeholder_regex.replace_all(&result, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            // Direct variable access (no $ prefix in scripts)
+            format!("{}", var_name)
+        }).to_string();
+        
+        Ok(result)
+    }
+    
+    /// Check if this is a template variable context that needs special handling
+    fn is_template_variable_in_assignment_context(&self, input: &str, var_pos: usize) -> bool {
+        // Look for patterns that suggest this is a template variable being used in a script
+        
+        // Check if we're in a function context
+        if input.contains("function ") {
+            return true;
+        }
+        
+        // Check for Lua-style script patterns
+        if input.contains(" = ") || input.contains("not ") || 
+           input.contains("if ") || input.contains("then") ||
+           input.contains("print(") || input.contains("local ") {
+            return true;
+        }
+        
+        false
+    }
+    
+    /// Check if this is a template variable assignment (left side of =)
+    fn is_template_variable_assignment(&self, input: &str, var_pos: usize) -> bool {
+        // Find the end of the variable name
+        let var_start = var_pos;
+        let var_end = input[var_start..].find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+            .map(|pos| var_start + pos)
+            .unwrap_or(input.len());
+        
+        let after_var = &input[var_end..];
+        
+        // Check if there's an assignment operator after the variable
+        let trimmed_after = after_var.trim_start();
+        trimmed_after.starts_with("=") && !trimmed_after.starts_with("==") && !trimmed_after.starts_with("!=")
+    }
+    
+    /// Check if this is a template variable read (right side of =, or in expressions)
+    fn is_template_variable_read(&self, input: &str, var_pos: usize) -> bool {
+        let before_var = &input[..var_pos];
+        
+        // Check for read contexts like "= not $var" or "if $var" etc.
+        if before_var.contains("= ") || before_var.contains("not ") || 
+           before_var.contains("if ") || before_var.contains("(") {
+            return true;
+        }
+        
+        true // Default to read context
     }
     
     /// Evaluate an expression with variable substitution

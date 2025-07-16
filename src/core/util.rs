@@ -48,13 +48,19 @@ impl fmt::Display for Color {
 }
 
 
-/// Parse a color string (#RGB, #RRGGBB, #RRGGBBAA)
+/// Parse a color string (#RGB, #RRGGBB, #RRGGBBAA) or CSS color keywords
 pub fn parse_color(color_str: &str) -> Result<Color> {
-    let trimmed = color_str.trim();
+    let trimmed = color_str.trim().to_lowercase();
+    
+    // Handle CSS color keywords
+    match trimmed.as_str() {
+        "transparent" => return Ok(Color::new(0, 0, 0, 0)),
+        _ => {}
+    }
     
     if !trimmed.starts_with('#') {
         return Err(CompilerError::InvalidFormat {
-            message: format!("Color must start with #: {}", color_str),
+            message: format!("Color must start with # or be a valid color keyword: {}", color_str),
         });
     }
     

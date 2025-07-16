@@ -64,8 +64,17 @@ impl ComponentResolver {
     
     pub fn resolve_components(&mut self, ast: &mut AstNode, state: &mut CompilerState) -> Result<()> {
         println!("DEBUG: Starting component resolution");
-        // Only resolve components - template structures will be resolved within component instantiation
+        
+        // First, resolve template structures (like @for loops) in the main App element
+        println!("DEBUG: Processing template structures (for loops, if statements)");
+        self.resolve_template_structures(ast, state)?;
+        println!("DEBUG: Template structures processed");
+        
+        // Then resolve component instances
+        println!("DEBUG: Processing component instances");
         self.resolve_recursive(ast, state)?;
+        println!("DEBUG: Component instances processed");
+        
         self.update_component_statistics(state);
         println!("DEBUG: Component resolution complete");
         Ok(())
@@ -91,8 +100,9 @@ impl ComponentResolver {
                 let mut i = 0;
                 while i < children.len() {
                     match &children[i] {
-                        AstNode::For { variable, collection, body } => {
+                        AstNode::For { index_variable, variable, collection, body } => {
                             // Extract values to avoid borrowing issues
+                            let index_var = index_variable.clone();
                             let var_name = variable.clone();
                             let collection_name = collection.clone();
                             let body_clone = body.clone();
@@ -105,7 +115,7 @@ impl ComponentResolver {
                                 children: vec![],
                             };
                             
-                            self.expand_for_loop(&mut expanded, &var_name, &collection_name, &body_clone, state)?;
+                            self.expand_for_loop(&mut expanded, index_var.as_deref(), &var_name, &collection_name, &body_clone, state)?;
                             
                             // Replace the @for with the expanded container
                             if let AstNode::Element { children: expanded_children, .. } = expanded {
@@ -202,14 +212,15 @@ impl ComponentResolver {
                     }
                 }
             }
-            AstNode::For { variable, collection, body } => {
+            AstNode::For { index_variable, variable, collection, body } => {
                 // Extract values to avoid borrowing issues
+                let index_var = index_variable.clone();
                 let var_name = variable.clone();
                 let collection_name = collection.clone();
                 let body_clone = body.clone();
                 
                 // Expand @for loops into multiple elements
-                self.expand_for_loop(element, &var_name, &collection_name, &body_clone, state)?;
+                self.expand_for_loop(element, index_var.as_deref(), &var_name, &collection_name, &body_clone, state)?;
             }
             AstNode::If { condition, then_body, elif_branches, else_body } => {
                 // Extract values to avoid borrowing issues
@@ -610,7 +621,11 @@ impl ComponentResolver {
             .cloned()
             .collect();
         
+        // DEBUG: Resolving function templates for component
+        
         for template in component_templates {
+            // DEBUG: Checking template
+            
             // Check if all required variables are available
             let mut all_vars_available = true;
             for var_name in &template.required_vars {
@@ -624,9 +639,23 @@ impl ComponentResolver {
                 continue; // Skip this template
             }
             
+            // Workaround for parser bug: convert $id_prefix_toggle to ${id_prefix}_toggle
+            let fixed_name_pattern = if template.name_pattern.starts_with("$id_prefix_") {
+                template.name_pattern.replace("$id_prefix_", "${id_prefix}_")
+            } else {
+                template.name_pattern.clone()
+            };
+            
+            // Also fix the function body which may contain the malformed function declaration
+            let fixed_body = template.body.replace("$id_prefix_", "${id_prefix}_");
+            
+            // DEBUG: Applying parser bug workaround
+            
             // Resolve the template with current variable context
-            let resolved_name = state.variable_context.substitute_variables(&template.name_pattern)?;
-            let resolved_body = state.variable_context.substitute_variables(&template.body)?;
+            let resolved_name = state.variable_context.substitute_variables(&fixed_name_pattern)?;
+            let resolved_body = state.variable_context.substitute_variables(&fixed_body)?;
+            
+            println!("✅ Resolved function: '{}' for component '{}'", resolved_name, component_name);
             
             // Build complete function code
             let param_list = template.parameters.join(", ");
@@ -695,6 +724,7 @@ impl ComponentResolver {
     fn expand_for_loop(
         &mut self,
         element: &mut AstNode,
+        index_variable: Option<&str>,
         variable: &str,
         collection: &str,
         body: &Vec<AstNode>,
@@ -718,8 +748,29 @@ impl ComponentResolver {
                 Some(var_entry) => {
                     println!("DEBUG: Found variable '{}' with value '{}'", lookup_name, var_entry.value);
                     let var_value = &var_entry.value;
-                    // If it's a comma-separated string, split it
-                    if var_value.contains(',') {
+                    
+                    // Handle array syntax like ["apple", "banana", "orange"]
+                    if var_value.starts_with('[') && var_value.ends_with(']') {
+                        // Parse array syntax
+                        let array_content = &var_value[1..var_value.len()-1]; // Remove [ and ]
+                        if array_content.is_empty() {
+                            vec![]
+                        } else {
+                            array_content.split(',')
+                                .map(|item| {
+                                    let trimmed = item.trim();
+                                    // Remove surrounding quotes if present
+                                    if (trimmed.starts_with('"') && trimmed.ends_with('"')) ||
+                                       (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+                                        trimmed[1..trimmed.len()-1].to_string()
+                                    } else {
+                                        trimmed.to_string()
+                                    }
+                                })
+                                .collect()
+                        }
+                    } else if var_value.contains(',') {
+                        // If it's a comma-separated string, split it
                         var_value.split(',')
                             .map(|item| item.trim().to_string())
                             .collect()
@@ -750,7 +801,7 @@ impl ComponentResolver {
             // Push a new scope for this iteration
             state.variable_context.push_scope(VariableScope::Function);
             
-            // Add the loop variable and index
+            // Add the loop variable
             state.variable_context.add_string_variable(
                 variable.to_string(),
                 item.clone(),
@@ -758,8 +809,17 @@ impl ComponentResolver {
                 0,
             )?;
             
+            // Add the index variable (either explicit or auto-generated)
+            let index_var_name = if let Some(idx_var) = index_variable {
+                // Use explicit index variable name
+                idx_var.to_string()
+            } else {
+                // Use auto-generated index variable for backward compatibility
+                format!("{}_index", variable)
+            };
+            
             state.variable_context.add_string_variable(
-                format!("{}_index", variable),
+                index_var_name,
                 (index + 1).to_string(),
                 state.current_file_path.clone(),
                 0,

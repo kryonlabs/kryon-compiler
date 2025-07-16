@@ -16,13 +16,12 @@ use crate::error::{CompilerError, Result};
 use crate::{CompilerOptions, CompilationStats}; // Refers to the struct in src/lib.rs
 
 use crate::compiler::frontend::semantic::{SemanticAnalyzer, convert_ast_to_state};
-use crate::compiler::frontend::ast::{AstNode, ComponentProperty};
+use crate::compiler::frontend::ast::AstNode;
 use crate::compiler::frontend::parse_module_graph_to_ast;
-use crate::types::ValueType;
 use crate::compiler::middle_end::module_context::ModuleGraph;
 use crate::compiler::middle_end::style_resolver::{StyleResolver, apply_style_properties_to_elements};
 use crate::compiler::middle_end::setup_from_module_graph;
-use crate::compiler::middle_end::script::process_template_variables;
+use crate::compiler::middle_end::script::{process_template_variables, collect_function_templates, process_resolved_scripts};
 
 use crate::compiler::middle_end::component_resolver::ComponentResolver;
 use crate::compiler::backend::size_calculator::SizeCalculator;
@@ -65,6 +64,10 @@ pub fn compile_with_options(
     let mut semantic_analyzer = frontend::semantic::SemanticAnalyzer::new();
     semantic_analyzer.analyze(&mut ast, &mut state)?;
 
+    // STAGE 4.5: FUNCTION TEMPLATE COLLECTION (Middle-End)
+    // Collect function templates from component definitions for later instantiation.
+    collect_function_templates(&ast, &mut state)?;
+
     // STAGE 5: RESOLUTION (Middle-End)
     // Resolve style inheritance and expand component instances in the AST.
     let mut style_resolver = middle_end::style_resolver::StyleResolver::new();
@@ -72,10 +75,15 @@ pub fn compile_with_options(
 
     // Component resolution - templates are now available from semantic analysis
     let component_count = state.component_defs.len();
-    if component_count > 0 {
-        let mut component_resolver = middle_end::component_resolver::ComponentResolver::new();
-        component_resolver.resolve_components(&mut ast, &mut state)?;
-    }
+    println!("DEBUG: Component count in main compile: {}", component_count);
+    
+    // Always process template structures (@for loops, @if statements) even if no components
+    let mut component_resolver = middle_end::component_resolver::ComponentResolver::new();
+    component_resolver.resolve_components(&mut ast, &mut state)?;
+
+    // STAGE 5.5: RESOLVED SCRIPT PROCESSING (Middle-End)
+    // Convert resolved function templates to script entries for the KRB
+    process_resolved_scripts(&mut state)?;
 
     // STAGE 6: STATE CONVERSION
     // Convert the final, resolved AST into the internal `CompilerState` representation.
@@ -262,56 +270,42 @@ fn compile_ast_with_state(
         log::debug!("Phase 1.25 complete. Style inheritance resolved");
     }
     
-    // Phase 1.3: Convert AST to internal representation
+    // Phase 1.3: Component resolution and template structure processing (moved before AST conversion)
     if options.debug_mode {
-        log::debug!("Phase 1.3: Converting AST to internal representation...");
+        log::debug!("Phase 1.3: Resolving components and template structures...");
+    }
+    
+    let component_count = state.component_defs.len();
+    
+    // Always process template structures (@for loops, @if statements) even if no components
+    let mut component_resolver = ComponentResolver::new();
+    component_resolver.resolve_components(&mut ast, state)?;
+    
+    if options.debug_mode {
+        log::debug!("Phase 1.3 complete. Template structures and component instances resolved in AST");
+    }
+    
+    // Clear component state since components are now expanded to regular elements
+    state.component_defs.clear();
+    state.component_ast_templates.clear();
+    
+    // Phase 1.4: Convert AST to internal representation
+    if options.debug_mode {
+        log::debug!("Phase 1.4: Converting AST to internal representation...");
     }
     
     convert_ast_to_state(&ast, state)?;
     
-    // Phase 1.45: Apply style properties to elements
+    // Phase 1.5: Apply style properties to elements
     if options.debug_mode {
-        log::debug!("Phase 1.45: Applying style properties to elements...");
+        log::debug!("Phase 1.5: Applying style properties to elements...");
     }
     
     apply_style_properties_to_elements(state)?;
     
     if options.debug_mode {
-        log::debug!("Phase 1.45 complete. Style properties applied to elements");
-    }
-    
-    if options.debug_mode {
-        log::debug!("Phase 1.4 complete. Elements: {}, Styles: {}, Components: {}", 
-                   state.elements.len(), state.styles.len(), state.component_defs.len());
-    }
-    
-    // Phase 1.5: Component resolution
-    if options.debug_mode {
-        log::debug!("Phase 1.5: Resolving components...");
-    }
-    
-    let component_count = state.component_defs.len();
-    
-    if component_count > 0 {
-        // Templates are now stored during semantic analysis, so we can directly resolve components
-        let mut component_resolver = ComponentResolver::new();
-        component_resolver.resolve_components(&mut ast, state)?;
-        
-        if options.debug_mode {
-            log::debug!("Phase 1.5 complete. Component instances resolved in AST");
-        }
-        
-        // Clear the state to rebuild it with resolved AST
-        state.elements.clear();
-        state.component_defs.clear();
-        state.component_ast_templates.clear();
-        
-        // Rebuild state from resolved AST (components are now expanded to regular elements)
-        convert_ast_to_state(&ast, state)?;
-    } else {
-        if options.debug_mode {
-            log::debug!("Phase 1.5 skipped. No components to resolve.");
-        }
+        log::debug!("Phase 1.5 complete. Style properties applied to elements");
+        log::debug!("Elements: {}, Styles: {}", state.elements.len(), state.styles.len());
     }
     
     // Phase 1.6: Process template variables

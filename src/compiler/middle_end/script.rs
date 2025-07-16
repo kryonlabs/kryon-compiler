@@ -8,11 +8,13 @@ use crate::core::properties::PropertyId;
 use crate::CompilerOptions;
 
 use crate::compiler::backend::codegen::{SCRIPT_STORAGE_INLINE, SCRIPT_STORAGE_EXTERNAL};
+use crate::compiler::middle_end::script_compiler::ScriptCompiler;
 use regex::Regex;
 use std::collections::HashMap;
 
 pub struct ScriptProcessor {
     function_regex: HashMap<ScriptLanguage, Regex>,
+    script_compiler: ScriptCompiler,
 }
 
 impl ScriptProcessor {
@@ -40,7 +42,12 @@ impl ScriptProcessor {
             Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*\{").unwrap()
         );
         
-        Self { function_regex }
+        let script_compiler = ScriptCompiler::new().expect("Failed to initialize ScriptCompiler");
+        
+        Self { 
+            function_regex,
+            script_compiler,
+        }
     }
     
     pub fn process_script(&self, script_node: &AstNode, state: &mut CompilerState) -> Result<ScriptEntry> {
@@ -57,10 +64,10 @@ impl ScriptProcessor {
                     0
                 };
                 
-                let (storage_format, data_size, code_data, resource_index, substituted_source) = match source {
+                let (storage_format, data_size, code_data, resource_index, substituted_source, entry_points) = match source {
                     ScriptSource::Inline(code) => {
-                        // Apply variable substitution to the script code
-                        let substituted_code = state.variable_context.substitute_variables(code)?;
+                        // Apply script-aware variable substitution to the script code
+                        let substituted_code = state.variable_context.substitute_variables_for_script(code)?;
                         
                         let storage = if mode.as_deref() == Some("external") {
                             SCRIPT_STORAGE_EXTERNAL
@@ -68,7 +75,16 @@ impl ScriptProcessor {
                             SCRIPT_STORAGE_INLINE
                         };
                         
-                        (storage, substituted_code.len() as u16, substituted_code.as_bytes().to_vec(), None, ScriptSource::Inline(substituted_code))
+                        // Compile script to bytecode and extract entry points
+                        let script_name = name.as_deref().unwrap_or("anonymous");
+                        let compiled_script = self.script_compiler.compile_source(
+                            language_id,
+                            &substituted_code,
+                            script_name,
+                            &state.current_file_path
+                        )?;
+                        
+                        (storage, compiled_script.bytecode.len() as u16, compiled_script.bytecode, None, ScriptSource::Inline(substituted_code), compiled_script.entry_points)
                     }
                     ScriptSource::External(path) => {
                         let res_type = match language_id {
@@ -79,14 +95,12 @@ impl ScriptProcessor {
                         };
                         
                         let resource_idx = state.add_resource(res_type as u8, path)?;
-                        (SCRIPT_STORAGE_EXTERNAL, resource_idx as u16, Vec::new(), Some(resource_idx), source.clone())
+                        let entry_points = self.extract_entry_points(language_id, source)?;
+                        (SCRIPT_STORAGE_EXTERNAL, resource_idx as u16, Vec::new(), Some(resource_idx), source.clone(), entry_points)
                     }
                 };
                 
-                // Extract entry points (function names) from the substituted source
-                let entry_points = self.extract_entry_points(language_id, &substituted_source)?;
                 let mut script_functions = Vec::new();
-                
                 for func_name in entry_points {
                     let func_name_index = state.add_string(&func_name)?;
                     script_functions.push(ScriptFunction {
@@ -370,9 +384,10 @@ mod tests {
 
 
 /// Collect function templates from AST (Phase 1.3)
-fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Result<()> {
+pub fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Result<()> {
     use crate::core::FunctionScope;
     
+    // DEBUG: collect_function_templates called
     
     match ast {
         AstNode::File { scripts, components, .. } => {
@@ -412,9 +427,11 @@ fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Resul
             // Collect component function templates
             for component_node in components {
                 if let AstNode::Component { name: comp_name, functions, .. } = component_node {
+                    println!("DEBUG: Processing component '{}' with {} functions", comp_name, functions.len());
                     for script_node in functions {
                         if let AstNode::Script { language, name, source, .. } = script_node {
                             if let Some(func_name) = name {
+                                println!("DEBUG: Creating function template '{}' for component '{}' (raw function name from parser)", func_name, comp_name);
                                 // Named @function - create single template
                                 let template = create_function_template(
                                     func_name,
@@ -425,6 +442,7 @@ fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Resul
                                     state
                                 )?;
                                 state.function_templates.push(template);
+                                println!("DEBUG: Added function template to state. Total templates: {}", state.function_templates.len());
                             } else {
                                 // Unnamed @script block - store for deferred processing during component instantiation
                                 println!("DEBUG: Storing @script block for component: {}", comp_name);
@@ -441,6 +459,10 @@ fn collect_function_templates(ast: &AstNode, state: &mut CompilerState) -> Resul
         }
         _ => {}
     }
+    
+    println!("DEBUG: collect_function_templates finished. Total function templates: {}, component scripts: {}", 
+             state.function_templates.len(), 
+             state.component_scripts.len());
     
     Ok(())
 }
@@ -491,12 +513,29 @@ fn create_function_template(
     })
 }
 
-/// Extract variables from text (simple $var pattern matching)
+/// Extract variables from text (supports both $var and ${var} patterns)
+/// Also handles parser bug where ${id_prefix}_toggle becomes $id_prefix_toggle
 fn extract_variables_from_text(text: &str, vars: &mut std::collections::HashSet<String>) {
-    let var_regex = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+    // Handle both ${var} and $var patterns
+    let var_regex = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
     for cap in var_regex.captures_iter(text) {
+        // Check ${var} pattern (group 1)
         if let Some(var_name) = cap.get(1) {
             vars.insert(var_name.as_str().to_string());
+        }
+        // Check $var pattern (group 2) - handle parser bug for function names
+        else if let Some(var_name) = cap.get(2) {
+            let var_str = var_name.as_str();
+            // Special handling for parser bug where ${id_prefix}_something becomes $id_prefix_something
+            if var_str.contains("_") && (var_str.starts_with("id_prefix_") || var_str.starts_with("option_")) {
+                // Extract just the variable part before the first underscore after common prefixes
+                if var_str.starts_with("id_prefix_") {
+                    vars.insert("id_prefix".to_string());
+                }
+                // Add other common patterns as needed
+            } else {
+                vars.insert(var_str.to_string());
+            }
         }
     }
 }
@@ -551,7 +590,7 @@ fn resolve_global_function_templates(state: &mut CompilerState) -> Result<()> {
 }
 
 /// Process resolved scripts into ScriptEntry format (Phase 1.7)
-fn process_resolved_scripts(state: &mut CompilerState) -> Result<()> {
+pub fn process_resolved_scripts(state: &mut CompilerState) -> Result<()> {
     
     // Collect resolved functions first to avoid borrowing issues
     let resolved_funcs: Vec<_> = state.resolved_functions.values().cloned().collect();
@@ -573,9 +612,18 @@ fn process_resolved_scripts(state: &mut CompilerState) -> Result<()> {
             function_name_index: func_name_index,
         };
         
-        // Apply variable substitution to the already-complete function code
-        let substituted_code = state.variable_context.substitute_variables(&resolved_func.code)?;
-        let code_data = substituted_code.as_bytes().to_vec();
+        // Apply script-aware variable substitution to the already-complete function code
+        let substituted_code = state.variable_context.substitute_variables_for_script(&resolved_func.code)?;
+        
+        // Compile function to bytecode
+        let script_compiler = ScriptCompiler::new()?;
+        let compiled_script = script_compiler.compile_source(
+            language_id,
+            &substituted_code,
+            &resolved_func.name,
+            &state.current_file_path
+        )?;
+        let code_data = compiled_script.bytecode;
         
         let calculated_size = 6 + 1 + code_data.len() as u32; // header + entry point + code data
         

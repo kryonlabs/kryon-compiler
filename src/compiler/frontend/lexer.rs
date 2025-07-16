@@ -14,6 +14,7 @@ pub enum TokenType {
     Image,
     Canvas,
     WasmView,
+    NativeRendererView,
     Button,
     Input,
     List,
@@ -113,6 +114,7 @@ impl fmt::Display for TokenType {
             TokenType::Image => write!(f, "Image"),
             TokenType::Canvas => write!(f, "Canvas"),
             TokenType::WasmView => write!(f, "WasmView"),
+            TokenType::NativeRendererView => write!(f, "NativeRendererView"),
             TokenType::Button => write!(f, "Button"),
             TokenType::Input => write!(f, "Input"),
             TokenType::List => write!(f, "List"),
@@ -127,7 +129,7 @@ impl fmt::Display for TokenType {
             TokenType::Include => write!(f, "@include"),
             TokenType::Variables => write!(f, "@variables"),
             TokenType::Script => write!(f, "@script"),
-            TokenType::Function => write!(f, "@function"),
+            TokenType::Function => write!(f, "@function/@method/@func"),
             TokenType::For => write!(f, "@for"),
             TokenType::If => write!(f, "@if"),
             TokenType::Elif => write!(f, "@elif"),
@@ -472,8 +474,8 @@ impl Lexer {
                         // For @script, we need to read the script content specially
                         TokenType::Script
                     },
-                    "@function" => {
-                        // For @function, we need to read the script content specially
+                    "@function" | "@method" | "@func" => {
+                        // For @function/@method/@func, we need to read the script content specially
                         TokenType::Function
                     },
                     "@for" => TokenType::For,
@@ -788,6 +790,7 @@ impl Lexer {
             "Image" => TokenType::Image,
             "Canvas" => TokenType::Canvas,
             "WasmView" => TokenType::WasmView,
+            "NativeRendererView" => TokenType::NativeRendererView,
             "Button" => TokenType::Button,
             "Input" => TokenType::Input,
             "List" => TokenType::List,

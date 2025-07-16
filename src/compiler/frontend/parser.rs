@@ -130,6 +130,20 @@ impl Parser {
         })
     }
     
+
+    fn skip_whitespace_and_comments(&mut self) {
+        while !self.is_at_end() {
+            // Peek at the next token without consuming it
+            match self.peek().token_type {
+                // If it's a newline or comment, consume it and continue the loop
+                TokenType::Newline | TokenType::Comment(_) => {
+                    self.advance();
+                }
+                // Otherwise, we've found a meaningful token, so we stop.
+                _ => break,
+            }
+        }
+    }
     fn parse_include(&mut self) -> Result<AstNode> {
         self.consume(TokenType::Include, "Expected @include")?;
         
@@ -148,6 +162,8 @@ impl Parser {
         self.consume(TokenType::Variables, "Expected @variables")?;
         self.consume(TokenType::LeftBrace, "Expected '{' after @variables")?;
         
+        self.skip_whitespace_and_comments();
+
         let mut variables = HashMap::new();
         
         while !self.check(&TokenType::RightBrace) && !self.is_at_end() {            
@@ -168,8 +184,13 @@ impl Parser {
             
             self.consume(TokenType::Colon, "Expected ':' after variable name")?;
             
+            self.skip_whitespace_and_comments();
+
             let value = self.parse_value()?;
             variables.insert(name, value.to_string());
+
+            self.skip_whitespace_and_comments();
+
         }
         
         self.consume(TokenType::RightBrace, "Expected '}' after variables")?;
@@ -565,10 +586,14 @@ impl Parser {
                     ));
                 }
                 template = Some(Box::new(self.parse_element()?));
+            } else if matches!(self.peek().token_type, TokenType::Identifier(_)) {
+                // Parse direct property declaration (without Properties wrapper)
+                let property = self.parse_direct_component_property()?;
+                properties.push(property);
             } else {
                 return Err(CompilerError::parse_legacy(
                     self.peek().line,
-                    "Expected 'Properties' block, '@function', '@script', or template element in component"
+                    "Expected 'Properties' block, property declaration, '@function', '@script', or template element in component"
                 ));
             }
         }
@@ -610,24 +635,34 @@ impl Parser {
                 )),
             };
             
-            self.consume(TokenType::Colon, "Expected ':' after property name")?;
-            
-            let property_type = match &self.advance().token_type {
-                TokenType::Identifier(type_name) => type_name.clone(),
-                _ => return Err(CompilerError::parse_legacy(
-                    self.previous().line,
-                    "Expected property type"
-                )),
+            let property_type = if self.match_token(&TokenType::Colon) {
+                // Old syntax: name: Type = value
+                match &self.advance().token_type {
+                    TokenType::Identifier(type_name) => Some(type_name.clone()),
+                    _ => return Err(CompilerError::parse_legacy(
+                        self.previous().line,
+                        "Expected property type after ':'"
+                    )),
+                }
+            } else {
+                // New syntax: name = value (infer type)
+                None
             };
             
-            let mut default_value = None;
-            if self.match_token(&TokenType::Equals) {
-                default_value = Some(self.parse_value()?.to_string());
-            }
+            self.consume(TokenType::Equals, "Expected '=' after property name or type")?;
+            
+            let default_value = Some(self.parse_value()?.to_string());
+            
+            // Infer type if not explicitly provided
+            let inferred_type = if property_type.is_none() {
+                Some(self.infer_type_from_value(&default_value.as_ref().unwrap())?)
+            } else {
+                property_type
+            };
             
             properties.push(ComponentProperty::new(
                 name,
-                property_type,
+                inferred_type,
                 default_value,
                 self.previous().line,
             ));
@@ -636,6 +671,61 @@ impl Parser {
         self.consume(TokenType::RightBrace, "Expected '}' after component properties")?;
         
         Ok(properties)
+    }
+    
+    fn parse_direct_component_property(&mut self) -> Result<ComponentProperty> {
+        let name = match &self.advance().token_type {
+            TokenType::Identifier(name) => name.clone(),
+            _ => return Err(CompilerError::parse_legacy(
+                self.previous().line,
+                "Expected property name"
+            )),
+        };
+        
+        self.consume(TokenType::Equals, "Expected '=' after property name")?;
+        
+        let default_value = Some(self.parse_value()?.to_string());
+        
+        // Infer type from default value
+        let inferred_type = Some(self.infer_type_from_value(&default_value.as_ref().unwrap())?);
+        
+        Ok(ComponentProperty::new(
+            name,
+            inferred_type,
+            default_value,
+            self.previous().line,
+        ))
+    }
+    
+    fn infer_type_from_value(&self, value_str: &str) -> Result<String> {
+        let trimmed = value_str.trim();
+        
+        // Check for boolean values
+        if trimmed == "true" || trimmed == "false" {
+            return Ok("Bool".to_string());
+        }
+        
+        // Check for array values
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            return Ok("Array".to_string());
+        }
+        
+        // Check for numeric values
+        if let Ok(_) = trimmed.parse::<i64>() {
+            return Ok("Number".to_string());
+        }
+        
+        if let Ok(_) = trimmed.parse::<f64>() {
+            return Ok("Number".to_string());
+        }
+        
+        // Check for color values (hex colors)
+        if trimmed.starts_with('#') && (trimmed.len() == 7 || trimmed.len() == 9) {
+            return Ok("Color".to_string());
+        }
+        
+        // Default to String for quoted strings and everything else
+        Ok("String".to_string())
     }
     
     fn parse_element(&mut self) -> Result<AstNode> {
@@ -647,6 +737,7 @@ impl Parser {
             TokenType::Image => "Image".to_string(),
             TokenType::Canvas => "Canvas".to_string(),
             TokenType::WasmView => "WasmView".to_string(),
+            TokenType::NativeRendererView => "NativeRendererView".to_string(),
             TokenType::Button => "Button".to_string(),
             TokenType::Input => "Input".to_string(),
             TokenType::Identifier(name) => name.clone(),
@@ -768,9 +859,11 @@ impl Parser {
             TokenType::Image => "image".to_string(),
             TokenType::Canvas => "canvas".to_string(),
             TokenType::WasmView => "wasmview".to_string(),
+            TokenType::NativeRendererView => "nativerenderview".to_string(),
             TokenType::Button => "button".to_string(),
             TokenType::Input => "input".to_string(),
             TokenType::Container => "container".to_string(),
+            TokenType::Identifier(name) => name.clone(),
             TokenType::App => "app".to_string(),
             _ => {
                 return Err(CompilerError::parse_legacy(
@@ -783,14 +876,20 @@ impl Parser {
     
         self.consume(TokenType::Colon, "Expected ':' after property name")?;
         
-        let value = if self.is_shorthand_property(&key) {
+        // Skip whitespace and newlines after the colon
+        self.skip_whitespace_and_comments();
+
+        let value = if self.is_function_call() {
+            self.parse_function_call()?
+        } else if self.is_shorthand_property(&key) {
             self.parse_shorthand_value(&key)?
         } else {
             self.parse_value()?
         };
         
-        // Optional semicolon
+        // Optional semicolon or comma
         self.match_token(&TokenType::Semicolon);
+        self.match_token(&TokenType::Comma);
         
         // Extract template variables from the value
         let template_variables = value.extract_variables();
@@ -801,6 +900,48 @@ impl Parser {
             Ok(AstProperty::new_with_templates(key, value, self.previous().line, template_variables))
         }
     }
+
+
+    fn is_function_call(&self) -> bool {
+        // A function call is an Identifier followed by a LeftParen
+        if let TokenType::Identifier(_) = self.tokens[self.current].token_type {
+            if self.current + 1 < self.tokens.len() {
+                if let TokenType::LeftParen = self.tokens[self.current + 1].token_type {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    
+    fn parse_function_call(&mut self) -> Result<PropertyValue> {
+        let name = if let TokenType::Identifier(name) = &self.peek().token_type {
+            name.clone()
+        } else {
+            // This should not happen if is_function_call() passed
+            return Err(CompilerError::parse_legacy(self.peek().line, "Expected function name"));
+        };
+        self.advance(); // consume name
+
+        self.consume(TokenType::LeftParen, "Expected '(' after function name")?;
+        
+        let mut args = Vec::new();
+        if !self.check(&TokenType::RightParen) {
+            loop {
+                // Each argument is itself a value (e.g., a variable, a string, a number)
+                args.push(self.parse_value()?);
+                
+                if !self.match_token(&TokenType::Comma) {
+                    break;
+                }
+            }
+        }
+        
+        self.consume(TokenType::RightParen, "Expected ')' after function arguments")?;
+
+        Ok(PropertyValue::FunctionCall { name, args })
+    }
+
     
     fn parse_value(&mut self) -> Result<PropertyValue> {
         // First try to parse as an expression (for ternary operators)
@@ -1024,6 +1165,7 @@ impl Parser {
             TokenType::Image => true,
             TokenType::Canvas => true,
             TokenType::WasmView => true,
+            TokenType::NativeRendererView => true,
             TokenType::Button => true,
             TokenType::Input => true,
             TokenType::Container => true,
@@ -1047,7 +1189,7 @@ impl Parser {
         match &self.peek().token_type {
             // Known element types
             TokenType::App | TokenType::Container | TokenType::Text |
-            TokenType::Link | TokenType::Image | TokenType::Canvas | TokenType::WasmView | TokenType::Button | TokenType::Input => true,
+            TokenType::Link | TokenType::Image | TokenType::Canvas | TokenType::WasmView | TokenType::NativeRendererView | TokenType::Button | TokenType::Input => true,
             
             // For identifiers, check if they're followed by an opening brace (element)
             // rather than a colon (property)
@@ -1451,12 +1593,12 @@ impl Parser {
         }
     }
     
-    /// Parse @for loop: @for variable in collection ... @end
+    /// Parse @for loop: @for variable in collection ... @end or @for index, variable in collection ... @end
     fn parse_for(&mut self) -> Result<AstNode> {
         self.consume(TokenType::For, "Expected '@for'")?;
         
-        // Parse variable name
-        let variable = match &self.peek().token_type {
+        // Parse first variable name
+        let first_variable = match &self.peek().token_type {
             TokenType::Identifier(name) => {
                 let var = name.clone();
                 self.advance();
@@ -1466,6 +1608,26 @@ impl Parser {
                 self.peek().line,
                 "Expected variable name after '@for'"
             )),
+        };
+        
+        // Check if there's a comma (indicating index, variable syntax)
+        let (index_variable, variable) = if self.match_token(&TokenType::Comma) {
+            // Parse second variable name for @for index, variable syntax
+            let second_variable = match &self.peek().token_type {
+                TokenType::Identifier(name) => {
+                    let var = name.clone();
+                    self.advance();
+                    var
+                }
+                _ => return Err(CompilerError::parse_legacy(
+                    self.peek().line,
+                    "Expected variable name after comma in '@for'"
+                )),
+            };
+            (Some(first_variable), second_variable)
+        } else {
+            // Single variable syntax @for variable
+            (None, first_variable)
         };
         
         // Parse 'in' keyword
@@ -1532,6 +1694,7 @@ impl Parser {
         self.consume(TokenType::End, "Expected '@end' after @for body")?;
         
         Ok(AstNode::For {
+            index_variable,
             variable,
             collection,
             body,

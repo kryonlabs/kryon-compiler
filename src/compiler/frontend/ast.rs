@@ -71,10 +71,11 @@ pub enum AstNode {
     },
     
     /// Template control flow structures
-    /// @for loop: @for item in collection
+    /// @for loop: @for item in collection or @for index, item in collection
     For {
-        variable: String,
-        collection: String, // Can be a property name or comma-separated list
+        index_variable: Option<String>, // Optional index variable (e.g., "i" in "@for i, item in collection")
+        variable: String,               // Item variable (e.g., "item" in "@for item in collection")
+        collection: String,             // Can be a property name or comma-separated list
         body: Vec<AstNode>,
     },
     
@@ -117,7 +118,11 @@ pub enum PropertyValue {
     Object(HashMap<String, PropertyValue>),
     Array(Vec<PropertyValue>),
     Variable(String), // Template variable reference
-    Expression(Box<Expression>), // For complex expressions like ternary operators
+    Expression(Box<Expression>),
+    FunctionCall {
+        name: String,
+        args: Vec<PropertyValue>,
+    },
 }
 
 /// Expression AST for complex value expressions
@@ -165,9 +170,16 @@ impl PropertyValue {
             PropertyValue::Radians(r) => format!("{}rad", r),
             PropertyValue::Turns(t) => format!("{}turn", t),
             PropertyValue::Object(_) => "[Object]".to_string(),
-            PropertyValue::Array(_) => "[Array]".to_string(),
+            PropertyValue::Array(arr) => {
+                let items: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                format!("[{}]", items.join(", "))
+            },
             PropertyValue::Variable(v) => format!("${}", v),
             PropertyValue::Expression(expr) => expr.to_string(),
+            PropertyValue::FunctionCall { name, args } => {
+                let arg_strs: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+                format!("{}({})", name, arg_strs.join(", "))
+            }
         }
     }
     
@@ -290,7 +302,7 @@ impl Expression {
 #[derive(Debug, Clone)]
 pub struct ComponentProperty {
     pub name: String,
-    pub property_type: String,
+    pub property_type: Option<String>,
     pub default_value: Option<String>,
     pub line: usize,
 }
@@ -355,7 +367,7 @@ impl AstProperty {
 }
 
 impl ComponentProperty {
-    pub fn new(name: String, property_type: String, default_value: Option<String>, line: usize) -> Self {
+    pub fn new(name: String, property_type: Option<String>, default_value: Option<String>, line: usize) -> Self {
         Self {
             name,
             property_type,
@@ -366,16 +378,17 @@ impl ComponentProperty {
     
     /// Get the value type hint
     pub fn value_type_hint(&self) -> ValueType {
-        match self.property_type.as_str() {
-            "String" => ValueType::String,
-            "Int" => ValueType::Int,
-            "Float" => ValueType::Float,
-            "Bool" => ValueType::Bool,
-            "Color" => ValueType::Color,
-            "StyleID" => ValueType::StyleId,
-            "Resource" => ValueType::Resource,
-            _ if self.property_type.starts_with("Enum(") => ValueType::Enum,
-            _ => ValueType::Custom,
+        match self.property_type.as_deref() {
+            Some("String") => ValueType::String,
+            Some("Int") => ValueType::Int,
+            Some("Float") => ValueType::Float,
+            Some("Bool") => ValueType::Bool,
+            Some("Color") => ValueType::Color,
+            Some("StyleID") => ValueType::StyleId,
+            Some("Resource") => ValueType::Resource,
+            Some(t) if t.starts_with("Enum(") => ValueType::Enum,
+            Some(_) => ValueType::Custom,
+            None => ValueType::String, // Default for inferred types
         }
     }
 }

@@ -120,6 +120,9 @@ pub enum PropertyId {
     MinViewportWidth = 0x9E,
     MaxViewportWidth = 0x9F,
     
+    // Rich Text Properties
+    Spans = 0xA0,
+    
     // Taffy Modern Flexbox Properties (0x40-0x4F)
     Display = 0x40,
     FlexDirection = 0x41,
@@ -206,6 +209,9 @@ impl PropertyId {
             // Responsive properties
             "min_viewport_width" | "min-viewport-width" => PropertyId::MinViewportWidth, // 0x9E
             "max_viewport_width" | "max-viewport-width" => PropertyId::MaxViewportWidth, // 0x9F
+            
+            // Rich text properties
+            "spans" => PropertyId::Spans, // 0xA0
             "width" => PropertyId::Width,                          // 0x19
             "height" => PropertyId::Height,                        // 0x1A
             "cursor" => PropertyId::Cursor,                        // 0x29

@@ -6,6 +6,7 @@ pub mod preprocessor;
 pub mod style_resolver;
 pub mod component_resolver;
 pub mod script;
+pub mod script_compiler;
 pub mod variable_context;
 
 // Also add a helper function here that was previously in compiler/mod.rs

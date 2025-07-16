@@ -421,10 +421,15 @@ impl SemanticAnalyzer {
     fn validate_property_value(&mut self, key: &str, value: &str, line: usize) -> Result<()> {
         match key {
             key if key.contains("color") => {
-                if !value.starts_with('#') && !value.starts_with('$') && !value.starts_with('"') {
+                let is_valid_color = value.starts_with('#') || // Hex color
+                                   value.starts_with('$') || // Variable
+                                   value.starts_with('"') || // String
+                                   self.is_valid_color_keyword(value); // Color keyword
+                
+                if !is_valid_color {
                     return Err(CompilerError::semantic_legacy(
                         line,
-                        format!("Color property '{}' must be a hex color (#RGB), variable ($var), or string", key)
+                        format!("Color property '{}' must be a hex color (#RGB), variable ($var), string, or valid color keyword", key)
                     ));
                 }
             }
@@ -617,24 +622,37 @@ impl SemanticAnalyzer {
                 }
             }
             PropertyId::Visibility => {
-                // Handle visible/visibility property - convert boolean or string to boolean
-                let visible = match cleaned_value.to_lowercase().as_str() {
-                    "true" | "visible" | "1" => true,
-                    "false" | "hidden" | "0" => false,
-                    _ => {
-                        return Err(CompilerError::semantic_legacy(
-                            prop.line_num,
-                            format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', or 'hidden'", cleaned_value)
-                        ));
-                    }
-                };
-                
-                Ok(KrbProperty {
-                    property_id: property_id as u8,
-                    value_type: ValueType::Byte,
-                    size: 1,
-                    value: vec![if visible { 1 } else { 0 }],
-                })
+                // Handle visible/visibility property - convert boolean or string to boolean, or template variables
+                if cleaned_value.starts_with('$') {
+                    // This is a template variable - store it as a string for later resolution
+                    let string_index = state.strings.iter()
+                        .position(|s| s.text == cleaned_value)
+                        .unwrap_or(0) as u8;
+                    Ok(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::TemplateVariable,
+                        size: 1,
+                        value: vec![string_index],
+                    })
+                } else {
+                    let visible = match cleaned_value.to_lowercase().as_str() {
+                        "true" | "visible" | "1" => true,
+                        "false" | "hidden" | "0" => false,
+                        _ => {
+                            return Err(CompilerError::semantic_legacy(
+                                prop.line_num,
+                                format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', 'hidden', or a template variable starting with '$'", cleaned_value)
+                            ));
+                        }
+                    };
+                    
+                    Ok(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Byte,
+                        size: 1,
+                        value: vec![if visible { 1 } else { 0 }],
+                    })
+                }
             }
             _ => {
                 // Default handling - store as custom property
@@ -942,6 +960,7 @@ impl SemanticAnalyzer {
         props
     }
     
+
     fn is_valid_image_property(&self, key: &str) -> bool {
         matches!(key,
             "src" | "alt" | "fit" | "id" | "pos_x" | "pos_y" | "width" | "height" |
@@ -1061,6 +1080,15 @@ impl SemanticAnalyzer {
         });
         
         Ok(index)
+    }
+    
+    /// Check if a string is a valid CSS color keyword
+    fn is_valid_color_keyword(&self, value: &str) -> bool {
+        match value.trim().to_lowercase().as_str() {
+            "transparent" => true,
+            // Can add more color keywords here in the future (red, blue, green, etc.)
+            _ => false,
+        }
     }
 }
 
@@ -1223,6 +1251,40 @@ pub fn convert_ast_to_state(ast: &AstNode, state: &mut CompilerState) -> Result<
     
     Ok(())
 }
+/// Parse a function call string to extract function name and parameters
+fn parse_function_call(func_call: &str) -> Result<(String, Vec<String>)> {
+    let func_call = func_call.trim();
+    
+    // Check if this is a function call with parameters
+    if let Some(paren_pos) = func_call.find('(') {
+        let func_name = func_call[..paren_pos].trim().to_string();
+        
+        // Check if there's a closing parenthesis
+        if let Some(close_paren) = func_call.rfind(')') {
+            let params_str = &func_call[paren_pos + 1..close_paren];
+            
+            // Parse parameters (simple comma-separated for now)
+            let params: Vec<String> = if params_str.trim().is_empty() {
+                Vec::new()
+            } else {
+                params_str.split(',')
+                    .map(|p| p.trim().to_string())
+                    .collect()
+            };
+            
+            Ok((func_name, params))
+        } else {
+            Err(CompilerError::semantic_legacy(
+                0,
+                format!("Invalid function call syntax: missing closing parenthesis in '{}'", func_call)
+            ))
+        }
+    } else {
+        // Simple function name without parameters
+        Ok((func_call.to_string(), Vec::new()))
+    }
+}
+
 fn convert_element_to_state(
     ast_element: &AstNode, 
     state: &mut CompilerState, 
@@ -1284,9 +1346,13 @@ fn convert_element_to_state(
                 // --- THIS IS THE CORRECTED LOGIC ---
                 // Each event is handled in its own, isolated block with explicit types.
                 "onClick" => {
-                    let func_name = ast_prop.cleaned_value();
-                    // Ensure the function name is added to the string table
-                    let callback_id = state.add_string(&func_name)? as u8;
+                    let func_call = ast_prop.cleaned_value();
+                    
+                    // Parse function call to extract function name and parameters
+                    let (func_name, params) = parse_function_call(&func_call)?;
+                    
+                    // Store the function call with parameters for runtime processing
+                    let callback_id = state.add_string(&func_call)? as u8;
                     element.krb_events.push(KrbEvent { event_type: EVENT_TYPE_CLICK, callback_id });
                 },
                 "onPress" => {
@@ -1455,6 +1521,24 @@ fn parse_calc_value(value: &str) -> Result<f32> {
     }
 }
 
+/// Parse space-separated values from a string into PropertyValue array
+fn parse_space_separated_values(value_str: &str) -> Vec<PropertyValue> {
+    value_str
+        .split_whitespace()
+        .map(|s| {
+            // Try to parse as integer first, then as float
+            if let Ok(int_val) = s.parse::<i64>() {
+                PropertyValue::Integer(int_val)
+            } else if let Ok(float_val) = s.parse::<f64>() {
+                PropertyValue::Number(float_val)
+            } else {
+                // If not a number, treat as string
+                PropertyValue::String(s.to_string())
+            }
+        })
+        .collect()
+}
+
 /// Expand shorthand properties into individual properties
 fn expand_shorthand_property(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
     // Check if this is a shorthand property
@@ -1468,35 +1552,105 @@ fn expand_shorthand_property(ast_prop: &AstProperty) -> Result<Vec<AstProperty>>
 
 /// Expand margin shorthand: margin: 10 0 -> margin_top: 10, margin_right: 0, etc.
 fn expand_margin_shorthand(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
-    if let PropertyValue::Array(ref values) = ast_prop.value {
-        let expanded = expand_box_model_values(values, "margin", ast_prop.line)?;
-        Ok(expanded)
-    } else {
-        // Single value: margin: 10 -> all sides
-        let value = ast_prop.value.clone();
-        Ok(vec![
-            AstProperty::new("margin_top".to_string(), value.clone(), ast_prop.line),
-            AstProperty::new("margin_right".to_string(), value.clone(), ast_prop.line),
-            AstProperty::new("margin_bottom".to_string(), value.clone(), ast_prop.line),
-            AstProperty::new("margin_left".to_string(), value, ast_prop.line),
-        ])
+    match &ast_prop.value {
+        PropertyValue::Array(ref values) => {
+            // Check if we have a single string value that contains space-separated values
+            if values.len() == 1 {
+                if let PropertyValue::String(ref string_value) = values[0] {
+                    let cleaned_value = string_value.trim_matches('"').trim_matches('\'');
+                    if cleaned_value.contains(' ') {
+                        // Parse space-separated values
+                        let parsed_values = parse_space_separated_values(cleaned_value);
+                        let expanded = expand_box_model_values(&parsed_values, "margin", ast_prop.line)?;
+                        return Ok(expanded);
+                    }
+                }
+            }
+            // Regular array handling
+            let expanded = expand_box_model_values(values, "margin", ast_prop.line)?;
+            Ok(expanded)
+        }
+        PropertyValue::String(ref string_value) => {
+            // Check if the string contains space-separated values
+            let cleaned_value = string_value.trim_matches('"').trim_matches('\'');
+            if cleaned_value.contains(' ') {
+                // Parse space-separated values
+                let values = parse_space_separated_values(cleaned_value);
+                let expanded = expand_box_model_values(&values, "margin", ast_prop.line)?;
+                Ok(expanded)
+            } else {
+                // Single value: margin: "10" -> all sides
+                let value = PropertyValue::String(cleaned_value.to_string());
+                Ok(vec![
+                    AstProperty::new("margin_top".to_string(), value.clone(), ast_prop.line),
+                    AstProperty::new("margin_right".to_string(), value.clone(), ast_prop.line),
+                    AstProperty::new("margin_bottom".to_string(), value.clone(), ast_prop.line),
+                    AstProperty::new("margin_left".to_string(), value, ast_prop.line),
+                ])
+            }
+        }
+        _ => {
+            // Single value: margin: 10 -> all sides
+            let value = ast_prop.value.clone();
+            Ok(vec![
+                AstProperty::new("margin_top".to_string(), value.clone(), ast_prop.line),
+                AstProperty::new("margin_right".to_string(), value.clone(), ast_prop.line),
+                AstProperty::new("margin_bottom".to_string(), value.clone(), ast_prop.line),
+                AstProperty::new("margin_left".to_string(), value, ast_prop.line),
+            ])
+        }
     }
 }
 
 /// Expand padding shorthand: padding: 10 0 -> padding_top: 10, padding_right: 0, etc.
 fn expand_padding_shorthand(ast_prop: &AstProperty) -> Result<Vec<AstProperty>> {
-    if let PropertyValue::Array(ref values) = ast_prop.value {
-        let expanded = expand_box_model_values(values, "padding", ast_prop.line)?;
-        Ok(expanded)
-    } else {
-        // Single value: padding: 10 -> all sides
-        let value = ast_prop.value.clone();
-        Ok(vec![
-            AstProperty::new("padding_top".to_string(), value.clone(), ast_prop.line),
-            AstProperty::new("padding_right".to_string(), value.clone(), ast_prop.line),
-            AstProperty::new("padding_bottom".to_string(), value.clone(), ast_prop.line),
-            AstProperty::new("padding_left".to_string(), value, ast_prop.line),
-        ])
+    match &ast_prop.value {
+        PropertyValue::Array(ref values) => {
+            // Check if we have a single string value that contains space-separated values
+            if values.len() == 1 {
+                if let PropertyValue::String(ref string_value) = values[0] {
+                    let cleaned_value = string_value.trim_matches('"').trim_matches('\'');
+                    if cleaned_value.contains(' ') {
+                        // Parse space-separated values
+                        let parsed_values = parse_space_separated_values(cleaned_value);
+                        let expanded = expand_box_model_values(&parsed_values, "padding", ast_prop.line)?;
+                        return Ok(expanded);
+                    }
+                }
+            }
+            // Regular array handling
+            let expanded = expand_box_model_values(values, "padding", ast_prop.line)?;
+            Ok(expanded)
+        }
+        PropertyValue::String(ref string_value) => {
+            // Check if the string contains space-separated values
+            let cleaned_value = string_value.trim_matches('"').trim_matches('\'');
+            if cleaned_value.contains(' ') {
+                // Parse space-separated values
+                let values = parse_space_separated_values(cleaned_value);
+                let expanded = expand_box_model_values(&values, "padding", ast_prop.line)?;
+                Ok(expanded)
+            } else {
+                // Single value: padding: "10" -> all sides
+                let value = PropertyValue::String(cleaned_value.to_string());
+                Ok(vec![
+                    AstProperty::new("padding_top".to_string(), value.clone(), ast_prop.line),
+                    AstProperty::new("padding_right".to_string(), value.clone(), ast_prop.line),
+                    AstProperty::new("padding_bottom".to_string(), value.clone(), ast_prop.line),
+                    AstProperty::new("padding_left".to_string(), value, ast_prop.line),
+                ])
+            }
+        }
+        _ => {
+            // Single value: padding: 10 -> all sides
+            let value = ast_prop.value.clone();
+            Ok(vec![
+                AstProperty::new("padding_top".to_string(), value.clone(), ast_prop.line),
+                AstProperty::new("padding_right".to_string(), value.clone(), ast_prop.line),
+                AstProperty::new("padding_bottom".to_string(), value.clone(), ast_prop.line),
+                AstProperty::new("padding_left".to_string(), value, ast_prop.line),
+            ])
+        }
     }
 }
 
@@ -1794,24 +1948,35 @@ fn convert_ast_property_to_krb(ast_prop: &AstProperty, state: &mut CompilerState
             }
         }
         PropertyId::Visibility => {
-            // Handle visible/visibility property - convert boolean or string to boolean
-            let visible = match cleaned_value.to_lowercase().as_str() {
-                "true" | "visible" | "1" => true,
-                "false" | "hidden" | "0" => false,
-                _ => {
-                    return Err(CompilerError::semantic_legacy(
-                        ast_prop.line,
-                        format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', or 'hidden'", cleaned_value)
-                    ));
-                }
-            };
-            
-            Some(KrbProperty {
-                property_id: property_id as u8,
-                value_type: ValueType::Byte,
-                size: 1,
-                value: vec![if visible { 1 } else { 0 }],
-            })
+            // Handle visible/visibility property - convert boolean or string to boolean, or template variables
+            if cleaned_value.starts_with('$') {
+                // This is a template variable - store it as a string for later resolution
+                let string_index = state.add_string(cleaned_value.clone())?;
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::TemplateVariable,
+                    size: 1,
+                    value: vec![string_index],
+                })
+            } else {
+                let visible = match cleaned_value.to_lowercase().as_str() {
+                    "true" | "visible" | "1" => true,
+                    "false" | "hidden" | "0" => false,
+                    _ => {
+                        return Err(CompilerError::semantic_legacy(
+                            ast_prop.line,
+                            format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', 'hidden', or a template variable starting with '$'", cleaned_value)
+                        ));
+                    }
+                };
+                
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Byte,
+                    size: 1,
+                    value: vec![if visible { 1 } else { 0 }],
+                })
+            }
         }
         
         // CSS Grid Properties

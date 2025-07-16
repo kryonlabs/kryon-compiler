@@ -49,6 +49,10 @@ walkdir = "2.4"
 
 # Utilities
 hex = "0.4"
+md5 = "0.7"
+
+# Script compilation (with feature gating)
+mlua = { version = "0.9", features = ["luajit", "vendored"], optional = true }
 
 [dev-dependencies]
 # Testing utilities
@@ -58,7 +62,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [features]
 default = ["all-engines"]
 all-engines = ["lua", "javascript", "python", "wren"]
-lua = []
+lua = ["mlua"]
 javascript = []
 python = []
 wren = []

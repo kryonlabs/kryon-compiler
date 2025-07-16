@@ -48,6 +48,9 @@ impl SourceMap {
 pub enum CompilerError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    
+    #[error("Script compilation error: {0}")]
+    ScriptCompilation(#[from] crate::compiler::middle_end::script_compiler::ScriptCompilationError),
 
     #[error("Parse error in {file} at line {line}: {message}")]
     Parse { file: String, line: usize, message: String },

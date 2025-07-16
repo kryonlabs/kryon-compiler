@@ -152,7 +152,7 @@ impl StyleResolver {
         }
         
         // Convert own source properties to KRB properties and add/override
-        let own_properties = self.convert_source_properties_to_krb(&source_properties)?;
+        let own_properties = self.convert_source_properties_to_krb(&source_properties, state)?;
         
         for prop in own_properties {
             inherited_properties.insert(prop.property_id, prop);
@@ -188,11 +188,11 @@ impl StyleResolver {
         }
     }
     
-    fn convert_source_properties_to_krb(&self, source_properties: &[SourceProperty]) -> Result<Vec<KrbProperty>> {
+    fn convert_source_properties_to_krb(&self, source_properties: &[SourceProperty], state: &mut CompilerState) -> Result<Vec<KrbProperty>> {
         let mut krb_properties = Vec::new();
         
         for source_prop in source_properties {
-            if let Some(krb_prop) = self.convert_single_property(source_prop)? {
+            if let Some(krb_prop) = self.convert_single_property(source_prop, state)? {
                 krb_properties.push(krb_prop);
             }
         }
@@ -200,7 +200,7 @@ impl StyleResolver {
         Ok(krb_properties)
     }
     
-    fn convert_single_property(&self, source_prop: &SourceProperty) -> Result<Option<KrbProperty>> {
+    fn convert_single_property(&self, source_prop: &SourceProperty, state: &mut CompilerState) -> Result<Option<KrbProperty>> {
         let property_id = self.get_property_id(&source_prop.key);
         let cleaned_value = clean_and_quote_value(&source_prop.value).0;
         
@@ -360,24 +360,35 @@ impl StyleResolver {
                 }
             }
             PropertyId::Visibility => {
-                // Handle visible/visibility property - convert boolean or string to boolean
-                let visible = match cleaned_value.to_lowercase().as_str() {
-                    "true" | "visible" | "1" => true,
-                    "false" | "hidden" | "0" => false,
-                    _ => {
-                        return Err(CompilerError::semantic_legacy(
-                            source_prop.line_num,
-                            format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', or 'hidden'", cleaned_value)
-                        ));
-                    }
-                };
-                
-                Some(KrbProperty {
-                    property_id: property_id as u8,
-                    value_type: ValueType::Byte,
-                    size: 1,
-                    value: vec![if visible { 1 } else { 0 }],
-                })
+                // Handle visible/visibility property - convert boolean or string to boolean, or template variables
+                if cleaned_value.starts_with('$') {
+                    // This is a template variable - store it as a string for later resolution
+                    let string_index = state.add_string(cleaned_value.clone())?;
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::TemplateVariable,
+                        size: 1,
+                        value: vec![string_index],
+                    })
+                } else {
+                    let visible = match cleaned_value.to_lowercase().as_str() {
+                        "true" | "visible" | "1" => true,
+                        "false" | "hidden" | "0" => false,
+                        _ => {
+                            return Err(CompilerError::semantic_legacy(
+                                source_prop.line_num,
+                                format!("Invalid visibility value: '{}'. Use 'true', 'false', 'visible', 'hidden', or a template variable starting with '$'", cleaned_value)
+                            ));
+                        }
+                    };
+                    
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Byte,
+                        size: 1,
+                        value: vec![if visible { 1 } else { 0 }],
+                    })
+                }
             }
             PropertyId::Padding | PropertyId::Margin => {
                 // Parse edge insets (can be 1, 2, or 4 values)
@@ -435,6 +446,50 @@ impl StyleResolver {
                     return Err(CompilerError::semantic_legacy(
                         source_prop.line_num,
                         format!("Invalid z-index value: {}", cleaned_value)
+                    ));
+                }
+            }
+            PropertyId::Position => {
+                let position_value = match cleaned_value.as_str() {
+                    "static" => 0u8,
+                    "relative" => 1u8,
+                    "absolute" => 2u8,
+                    "fixed" => 3u8,
+                    "sticky" => 4u8,
+                    _ => return Err(CompilerError::semantic_legacy(
+                        source_prop.line_num,
+                        format!("Invalid position value: '{}'. Use 'static', 'relative', 'absolute', 'fixed', or 'sticky'", cleaned_value)
+                    )),
+                };
+                
+                Some(KrbProperty {
+                    property_id: property_id as u8,
+                    value_type: ValueType::Enum,
+                    size: 1,
+                    value: vec![position_value],
+                })
+            }
+            PropertyId::Left | PropertyId::Top | PropertyId::Right | PropertyId::Bottom => {
+                // Handle positioning offset properties as i16 values or auto
+                if cleaned_value == "auto" {
+                    // Use special value -32768 to represent auto
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: (-32768i16).to_le_bytes().to_vec(),
+                    })
+                } else if let Ok(offset) = cleaned_value.parse::<i16>() {
+                    Some(KrbProperty {
+                        property_id: property_id as u8,
+                        value_type: ValueType::Short,
+                        size: 2,
+                        value: offset.to_le_bytes().to_vec(),
+                    })
+                } else {
+                    return Err(CompilerError::semantic_legacy(
+                        source_prop.line_num,
+                        format!("Invalid position offset value: {} (must be a number or 'auto')", cleaned_value)
                     ));
                 }
             }
@@ -711,7 +766,7 @@ pub fn apply_style_properties_to_elements(state: &mut CompilerState) -> Result<(
                                 element.width = width;
                             }
                         },
-                        0x1B => { // PropertyId::Height  
+                        0x1A => { // PropertyId::Height  
                             if property.value_type == ValueType::Short && property.value.len() >= 2 {
                                 let height = u16::from_le_bytes([property.value[0], property.value[1]]);
                                 element.height = height;
